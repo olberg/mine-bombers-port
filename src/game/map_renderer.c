@@ -1,6 +1,7 @@
 #include "game/map_renderer.h"
 #include "game/sprites.h"
 #include "raylib.h"
+#include <stddef.h>
 
 static const TileMap *current_map = NULL;
 static bool darkness_mode = false;

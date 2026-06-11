@@ -44,17 +44,26 @@ static void trace_log(int logLevel, const char *text, va_list args)
     };
     const char *lvl = (logLevel >= 0 && logLevel <= 7) ? level_str[logLevel] : "???";
 
+    /* A va_list is single-use: vprintf consumes it, so each output needs its
+     * own va_copy (reusing the original segfaults on x86_64 Linux). */
+    va_list console_args;
+    va_copy(console_args, args);
+
     /* Console */
     printf("[%s] ", lvl);
-    vprintf(text, args);
+    vprintf(text, console_args);
     printf("\n");
+    va_end(console_args);
 
     /* File */
     if (log_file) {
+        va_list file_args;
+        va_copy(file_args, args);
         fprintf(log_file, "[%s] ", lvl);
-        vfprintf(log_file, text, args);
+        vfprintf(log_file, text, file_args);
         fprintf(log_file, "\n");
         fflush(log_file);
+        va_end(file_args);
     }
 }
 
