@@ -680,6 +680,129 @@ void test_direction_resolution_per_player_independent(void)
     player_input_inject_mode(false);
 }
 
+/* One-shot keys (bomb, choose/sell) must not be lost when the press edge
+ * lands on an ODD frame: the weapon tick only runs on even frames
+ * (seg_1000:7193), but the original's ISR key byte stays set from key-make
+ * until the handler consumes it (seg_1000:2631-2632 bomb, 2795-2796
+ * choose). The port latches the raylib one-frame edge to reproduce that.
+ * Regression: the cycle key used to be read unlatched in the even-frame
+ * block, silently dropping ~half of all taps. */
+void test_one_shot_keys_latch_across_odd_frames(void)
+{
+    player_input_inject_mode(true);
+
+    Round r;
+    memset(&r, 0, sizeof(Round));
+    setup_test_map(&r.map);
+    r.state = ROUND_FADE_IN;
+    r.time_remaining = -1;
+    r.time_total = -1;
+    r.single_player = false;
+
+    Player players[2];
+    for (int i = 0; i < 2; i++) {
+        player_init_defaults(&players[i], i);
+    }
+    players[0].x_pos = tile_to_pixel_x(8);
+    players[0].y_pos = tile_to_pixel_y(8);
+    players[1].x_pos = tile_to_pixel_x(50);
+    players[1].y_pos = tile_to_pixel_y(20);
+    players[0].weapons[player_weapon_index(WEAPON_SMALL_BOMB)]  = 5;
+    players[0].weapons[player_weapon_index(WEAPON_MEDIUM_BOMB)] = 5;
+    players[0].selected_weapon = WEAPON_SMALL_BOMB;
+
+    /* Run through fade-in (also clears the latches) */
+    int guard = 0;
+    while (r.state == ROUND_FADE_IN && guard++ < 20) {
+        round_update(&r, players, 2);
+    }
+    TEST_ASSERT_EQUAL_INT(ROUND_RUNNING, r.state);
+    TEST_ASSERT_EQUAL_INT(0, r.frame_counter);
+
+    /* Tap bomb + choose on what becomes frame 1 (odd: no weapon tick) */
+    player_input_inject(0, PLAYER_INPUT_BOMB,  false, true);
+    player_input_inject(0, PLAYER_INPUT_CYCLE, false, true);
+    round_update(&r, players, 2);
+    TEST_ASSERT_EQUAL_INT(1, r.frame_counter);
+    TEST_ASSERT_EQUAL_UINT8('0', r.map.tiles[8][8]);  /* not consumed yet */
+    TEST_ASSERT_EQUAL_UINT8(WEAPON_SMALL_BOMB, players[0].selected_weapon);
+
+    /* Key released before the next frame — the press must still register */
+    player_input_inject_clear(0);
+    round_update(&r, players, 2);
+    TEST_ASSERT_EQUAL_INT(2, r.frame_counter);
+
+    /* Bomb consumed: small bomb placed at the player's tile, ammo 5 -> 4 */
+    TEST_ASSERT_EQUAL_UINT8(WEAPON_SMALL_BOMB, r.map.tiles[8][8]);
+    TEST_ASSERT_EQUAL_INT(4, players[0].weapons[player_weapon_index(WEAPON_SMALL_BOMB)]);
+
+    /* Choose consumed: cycled to the next weapon with stock */
+    TEST_ASSERT_EQUAL_UINT8(WEAPON_MEDIUM_BOMB, players[0].selected_weapon);
+
+    /* Latches are one-shot: a further even frame must NOT re-fire */
+    round_update(&r, players, 2);
+    round_update(&r, players, 2);
+    TEST_ASSERT_EQUAL_INT(4, players[0].weapons[player_weapon_index(WEAPON_SMALL_BOMB)]);
+    TEST_ASSERT_EQUAL_UINT8(WEAPON_MEDIUM_BOMB, players[0].selected_weapon);
+
+    player_input_inject_mode(false);
+    round_cleanup(&r);
+}
+
+/* Facing must turn toward a held direction even when movement is blocked
+ * by a wall (digging): the original updates facing (+0xA6) from direction
+ * (+0xA4) at the head of every weapon tick (process_weapons,
+ * seg_1000:2602-2604), NOT on successful movement. Regression: the port
+ * used to update last_direction only inside player_move's moved branch,
+ * so a digging player's sprite never turned toward the wall. */
+void test_facing_updates_while_digging(void)
+{
+    player_input_inject_mode(true);
+
+    Round r;
+    memset(&r, 0, sizeof(Round));
+    setup_test_map(&r.map);
+    r.state = ROUND_FADE_IN;
+    r.time_remaining = -1;
+    r.time_total = -1;
+    r.single_player = false;
+
+    Player players[2];
+    for (int i = 0; i < 2; i++) {
+        player_init_defaults(&players[i], i);
+    }
+    players[0].x_pos = tile_to_pixel_x(8);
+    players[0].y_pos = tile_to_pixel_y(8);
+    players[1].x_pos = tile_to_pixel_x(50);
+    players[1].y_pos = tile_to_pixel_y(20);
+
+    /* Diggable wall directly above P1 (DIR_UP checks [row][col-1]) */
+    r.map.tiles[8][7] = '7';
+    r.map.collision[8][7] = 3000;
+
+    int guard = 0;
+    while (r.state == ROUND_FADE_IN && guard++ < 20) {
+        round_update(&r, players, 2);
+    }
+    TEST_ASSERT_EQUAL_INT(ROUND_RUNNING, r.state);
+    TEST_ASSERT_EQUAL_INT(DIR_RIGHT, players[0].last_direction);  /* spawn facing */
+
+    /* Hold UP against the wall for 4 frames = 2 weapon ticks */
+    player_input_inject(0, PLAYER_INPUT_UP, true, false);
+    int16_t y_before = players[0].y_pos;
+    for (int f = 0; f < 4; f++) {
+        round_update(&r, players, 2);
+    }
+
+    TEST_ASSERT_EQUAL_INT16(y_before, players[0].y_pos);      /* never moved */
+    TEST_ASSERT_EQUAL_INT(DIR_UP, players[0].direction);
+    TEST_ASSERT_EQUAL_INT(DIR_UP, players[0].last_direction); /* turned anyway */
+    TEST_ASSERT_EQUAL_UINT8(1, players[0].digging);           /* dig anim on */
+
+    player_input_inject_mode(false);
+    round_cleanup(&r);
+}
+
 /* Extra life (0xB3) pickup only works in single-player (seg_1000:3566) */
 void test_extra_life_single_player_only(void)
 {
@@ -845,6 +968,8 @@ int main(void)
     RUN_TEST(test_sp_retry_with_lives);
     RUN_TEST(test_sp_game_over_no_lives);
     RUN_TEST(test_sp_death_inactivity_ramp);
+    RUN_TEST(test_one_shot_keys_latch_across_odd_frames);
+    RUN_TEST(test_facing_updates_while_digging);
     RUN_TEST(test_extra_life_single_player_only);
     RUN_TEST(test_direction_to_sprite_band);
     RUN_TEST(test_direction_resolution_priority);

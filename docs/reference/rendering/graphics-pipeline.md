@@ -110,7 +110,7 @@ fade_out: color[j] = (target[j] / steps) * (steps - i)
 2. Capture full screen as backup sprite
 3. Extract 100+ individual 10x10 sprites from known grid positions
 4. Extract larger composite sprites for HUD elements, menu cursor (shovel)
-5. Extract 12 player color variant sprite sets
+5. Extract 12 sprite sets: 4 player WALK sets, 4 player DIG sets, 4 monster sets
 
 **Note:** The sprite sheet is `SIKA.SPY`, NOT `SHAPET.SPY`. SHAPET.SPY is a tile-type help/reference chart with text descriptions. The string at `0x1030:0x7972` resolves to `sika.spy` (MB.EXE offset 0x01AA73).
 
@@ -129,24 +129,48 @@ Row 3+ (y=30+): Mixed special sprites, effects
 - Horizontal stride between frames: 10 pixels
 - Each sprite: 10x10 pixels
 
-**12 color variants** loaded from different sprite sheet positions:
+**12 sets** loaded from different sprite sheet positions (seg_1010:4859-4870).
+The destinations of the first 8 are INSIDE the player structs (P1 base
+0x1BEA, stride 0x10A): +0x22 = the walk-frame pointer table, +0x62 = the
+dig-frame pointer table read by `animate_player_sprite` mode 1. There are
+no "alternate color" player sets — sets 5-8 (previously misread as ALT
+colors selected by option toggles) are the per-player DIGGING animations;
+the option toggles are the game options (darkness/free market/selling/
+winner-by), unrelated to sprites.
 
-| Variant | Sheet Y | Sheet X | Destination |
-|---------|---------|---------|-------------|
-| 1 | 10 | 0xA0 (160) | 0x1C0C |
-| 2 | 0 | 0xA0 | 0x1D16 |
-| 3 | 30 | 0xA0 | 0x1E20 |
-| 4 | 40 | 0xA0 | 0x1F2A |
-| 5 | 200 | 0xA0 | 0x1C4C |
-| 6 | 200 | 0 | 0x1D56 |
-| 7 | 210 | 0 | 0x1E60 |
-| 8 | 210 | 0xA0 | 0x1F6A |
-| 9 | 50 | 0xA0 | 0x2034 |
-| 10 | 60 | 0xA0 | 0x213E |
-| 11 | 70 | 0xA0 | 0x2352 |
-| 12 | 80 | 0 | 0x245C |
+| Set | Content | Sheet Y | Sheet X | Destination |
+|-----|---------|---------|---------|-------------|
+| 1 | P1 walk | 10 | 0xA0 (160) | 0x1C0C (P1+0x22) |
+| 2 | P2 walk | 0 | 0xA0 | 0x1D16 (P2+0x22) |
+| 3 | P3 walk | 30 | 0xA0 | 0x1E20 (P3+0x22) |
+| 4 | P4 walk | 40 | 0xA0 | 0x1F2A (P4+0x22) |
+| 5 | P1 dig | 200 | 0xA0 | 0x1C4C (P1+0x62) |
+| 6 | P2 dig | 200 | 0 | 0x1D56 (P2+0x62) |
+| 7 | P3 dig | 210 | 0 | 0x1E60 (P3+0x62) |
+| 8 | P4 dig | 210 | 0xA0 | 0x1F6A (P4+0x62) |
+| 9 | Monster 1 | 50 | 0xA0 | 0x2034 |
+| 10 | Monster 2 | 60 | 0xA0 | 0x213E |
+| 11 | Monster 3 | 70 | 0xA0 | 0x2352 |
+| 12 | Monster 4 | 80 | 0 | 0x245C |
 
-Variants 9-12 have additional mirrored copies at +0x40 offset.
+Sets 9-12 have additional mirrored copies at +0x40 offset.
+
+### Walk/Dig Animation (animate_player_sprite, seg_1000:3770)
+
+Called from every `move_player` direction case — every frame a direction is
+held, whether or not the player actually moved. The per-player counter
+(+0xA2) advances each call and wraps at 30; frames map by ping-pong
+thresholds `<5,<10,<15,<20,<25,<30 → 0,1,2,3,2,1`. Mode selection (the
+tail of each move_player direction case): DIG frames (+0x62 table) when the
+tile AHEAD on the movement axis is in `{'7'-'9','A','C'-'F','p','q',
+0xAC-0xAE}` ('B' excluded) and the player is centered on that axis
+(intra == 5); WALK frames (+0x22) otherwise. While digging, sound trigger
+#8 (picaxe, 11000+random(100) Hz) plays once per cycle at counter 16.
+Facing (+0xA6) is NOT updated by movement — process_weapons copies
+direction (+0xA4) into it at the head of every weapon tick
+(seg_1000:2602-2604), so a player pushing a wall turns toward it. When
+stopped (direction 0), move_player blits walk frame 0 of the facing
+direction.
 
 ### Larger HUD/Menu Sprites
 Captured as arbitrary rectangles from the sprite sheet (SIKA.SPY):

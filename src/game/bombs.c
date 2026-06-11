@@ -1,4 +1,5 @@
 #include "game/bombs.h"
+#include "game/config.h"
 #include "game/weapons.h"
 #include "game/player_db.h"
 #include "game/movement.h"
@@ -223,12 +224,16 @@ static void apply_explosion_hit(TileMap *map, int col, int row, bool strong,
     /* Skip gate switches */
     if (tile == 0xB4 || tile == 0xB5) return;
 
+    /* Wall classification (seg_1010:772): ONLY intact walls '7'-'9' and
+     * 'A'-'F'. Already-degraded walls ('p','q','5','6') are NOT in the set —
+     * they take the fire branch below, i.e. the second weak hit DESTROYS
+     * them (the classic two-bomb wall kill). They used to be misclassified
+     * as walls here, which reset them to fresh 500/1000 HP on every hit and
+     * made walls unkillable by bombs alone. */
     bool is_wall = (tile >= '7' && tile <= '9') || (tile >= 'A' && tile <= 'F');
     bool is_reinforced = (tile == 0xAC || tile == 0xAD || tile == 0xAE);
-    /* Already-degraded walls ('p','q','5','6') */
-    bool is_degraded = (tile == 'p' || tile == 'q' || tile == '5' || tile == '6');
 
-    if (!is_wall && !is_degraded) {
+    if (!is_wall) {
         /* Non-wall tile */
         if (!is_reinforced) {
             /* Place fire (seg_1010:775-778) */
@@ -258,7 +263,7 @@ static void apply_explosion_hit(TileMap *map, int col, int row, bool strong,
             }
         }
     } else {
-        /* Wall tile ('7'-'9','A'-'F' or degraded 'p','q','5','6') */
+        /* Intact wall tile ('7'-'9','A'-'F') */
         if (strong) {
             /* Strong mode: walls become fire (seg_1010:811-813) */
             map->tiles[row][col] = TILE_EXPLOSION;
@@ -500,10 +505,11 @@ static bool is_player_on_tile(int col, int row)
  * damage=0: presence check only (arrow blocking). Kill → corpse tile 'f'.
  * damage>0: explosion damage. Kill → explosion death tile 0x85 + death sound.
  *
- * In multiplayer, original applies a random multiplier via FUN_1030_1545/1537/1549
- * (Borland Pascal real number multiply). We approximate with direct subtraction
- * since the exact multiplier logic is unclear — the damage values already encode
- * the intended severity.
+ * Player damage scaling (seg_1010:5378-5386): single-player subtracts raw
+ * damage; multiplayer routes it through the Pascal real RTL
+ * (FUN_1030_1545/1537/1549 = load, multiply, Trunc) — that multiplier is
+ * the BOMB DAMAGE % option: health -= Trunc(damage * pct/100). Entities
+ * always take raw damage (seg_1010:5442).
  */
 bool bombs_check_player_damage(TileMap *map, int col, int row, uint8_t damage)
 {
@@ -521,8 +527,13 @@ bool bombs_check_player_damage(TileMap *map, int col, int row, uint8_t damage)
         int pcol = pixel_to_tile_col(g_players[i].y_pos + SPRITE_H / 2);
         if (prow != row || pcol != col) continue;
 
-        /* Apply damage to player health (seg_1010:5378-5386) */
-        g_players[i].health -= (int16_t)damage;
+        /* Apply damage to player health (seg_1010:5378-5386): raw in SP,
+         * scaled by the BOMB DAMAGE % option in MP (see header comment). */
+        int16_t dmg = (int16_t)damage;
+        if (g_num_active_players >= 2) {
+            dmg = (int16_t)(((int)damage * g_config.bomb_damage_pct) / 100);
+        }
+        g_players[i].health -= dmg;
 
         /* Check if player died from this damage */
         if (g_players[i].health < 1 && !g_players[i].dead) {

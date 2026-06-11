@@ -1,5 +1,6 @@
 #include "unity.h"
 #include "game/bombs.h"
+#include "game/config.h"
 #include "game/player.h"
 #include "game/map.h"
 #include "game/map_renderer.h"
@@ -14,6 +15,9 @@ void setUp(void) {
     memset(g_players, 0, sizeof(g_players));
     g_num_active_players = 0;
     bombs_set_entity_list(NULL);
+    /* bombs.c scales MP player damage by g_config.bomb_damage_pct;
+     * default 100% = raw damage, so existing expectations hold. */
+    config_set_defaults();
 }
 
 void tearDown(void) {}
@@ -226,6 +230,125 @@ void test_bomb_detonation_kills_nearby_player(void)
     TEST_ASSERT_EQUAL_INT(1, g_players[0].deaths);
 }
 
+/* Weak explosions DESTROY already-degraded walls ('p','q','5','6'):
+ * original FUN_1010_1326 (seg_1010:772) classifies only intact '7'-'9' /
+ * 'A'-'F' as walls; degraded tiles take the fire branch (seg_1010:775-778).
+ * Regression: the port used to put degraded tiles in the wall branch,
+ * resetting them to fresh 500/1000 HP 'p'/'q' on every hit, so a wall
+ * could cycle p<->q forever and never die to bombs alone. */
+void test_weak_explosion_destroys_degraded_walls(void)
+{
+    TileMap map;
+    memset(&map, 0, sizeof(map));
+    memset(map.bomb_owner, 0xFF, sizeof(map.bomb_owner));
+    g_num_active_players = 0;
+
+    /* Small bomb at (5,5); its weak cross hits (5,4),(5,6),(4,5),(6,5) */
+    map.tiles[5][5] = BOMB_SMALL_1;
+    map.overlay[5][5] = 1;
+    map.collision[5][5] = BOMB_COLLISION_DEFAULT;
+
+    map.tiles[5][4] = 'p'; map.collision[5][4] = 1000;
+    map.tiles[5][6] = 'q'; map.collision[5][6] = 500;
+    map.tiles[4][5] = '5'; map.collision[4][5] = 300;
+    map.tiles[6][5] = '6'; map.collision[6][5] = 700;
+
+    bombs_update(&map);
+
+    TEST_ASSERT_EQUAL_HEX8(TILE_EXPLOSION, map.tiles[5][4]);
+    TEST_ASSERT_EQUAL_HEX8(TILE_EXPLOSION, map.tiles[5][6]);
+    TEST_ASSERT_EQUAL_HEX8(TILE_EXPLOSION, map.tiles[4][5]);
+    TEST_ASSERT_EQUAL_HEX8(TILE_EXPLOSION, map.tiles[6][5]);
+    TEST_ASSERT_EQUAL_UINT16(0, map.collision[5][4]);
+    TEST_ASSERT_EQUAL_UINT16(0, map.collision[5][6]);
+}
+
+/* The classic two-bomb wall kill: first weak hit degrades an intact wall
+ * to 'p'/'q' (seg_1010:799-809), the second destroys it. */
+void test_two_weak_bombs_destroy_intact_wall(void)
+{
+    TileMap map;
+    memset(&map, 0, sizeof(map));
+    memset(map.bomb_owner, 0xFF, sizeof(map.bomb_owner));
+    g_num_active_players = 0;
+
+    map.tiles[5][6] = '7';
+    map.collision[5][6] = 3000;
+
+    /* First bomb */
+    map.tiles[5][5] = BOMB_SMALL_1;
+    map.overlay[5][5] = 1;
+    map.collision[5][5] = BOMB_COLLISION_DEFAULT;
+    bombs_update(&map);
+
+    uint8_t t = map.tiles[5][6];
+    TEST_ASSERT_TRUE(t == 'p' || t == 'q');
+    TEST_ASSERT_EQUAL_UINT16(t == 'p' ? 1000 : 500, map.collision[5][6]);
+
+    /* Second bomb at the same spot finishes the degraded wall */
+    map.tiles[5][5] = BOMB_SMALL_1;
+    map.overlay[5][5] = 1;
+    map.collision[5][5] = BOMB_COLLISION_DEFAULT;
+    bombs_update(&map);
+
+    TEST_ASSERT_EQUAL_HEX8(TILE_EXPLOSION, map.tiles[5][6]);
+    TEST_ASSERT_EQUAL_UINT16(0, map.collision[5][6]);
+}
+
+/* BOMB DAMAGE % scales player damage in MP only (seg_1010:5378-5386:
+ * raw subtraction when num_players < 2, Trunc(damage*pct/100) via the
+ * Pascal real RTL otherwise). */
+void test_bomb_damage_pct_scales_mp_player_damage(void)
+{
+    TileMap map;
+    memset(&map, 0, sizeof(map));
+    memset(map.bomb_owner, 0xFF, sizeof(map.bomb_owner));
+
+    g_num_active_players = 2;
+    place_player_at_tile(0, 5, 5, 100);
+    place_player_at_tile(1, 10, 10, 100);
+    g_config.bomb_damage_pct = 50;
+
+    bombs_check_player_damage(&map, 5, 5, 60);
+    TEST_ASSERT_EQUAL_INT(70, g_players[0].health);  /* 100 - 60*50/100 */
+
+    /* At 0% MP explosions are harmless to players */
+    g_config.bomb_damage_pct = 0;
+    bombs_check_player_damage(&map, 5, 5, 0xFF);
+    TEST_ASSERT_EQUAL_INT(70, g_players[0].health);
+    TEST_ASSERT_EQUAL_INT(0, g_players[0].dead);
+}
+
+/* Single-player ignores the option (raw damage), and entities always take
+ * raw damage even in MP (seg_1010:5442). */
+void test_bomb_damage_pct_ignored_in_sp_and_for_entities(void)
+{
+    TileMap map;
+    memset(&map, 0, sizeof(map));
+    memset(map.bomb_owner, 0xFF, sizeof(map.bomb_owner));
+
+    g_config.bomb_damage_pct = 50;
+
+    g_num_active_players = 1;
+    place_player_at_tile(0, 5, 5, 100);
+    bombs_check_player_damage(&map, 5, 5, 60);
+    TEST_ASSERT_EQUAL_INT(40, g_players[0].health);  /* raw 60 in SP */
+
+    g_num_active_players = 2;
+    place_player_at_tile(1, 10, 10, 100);
+    Entity e;
+    memset(&e, 0, sizeof(e));
+    e.type = ENTITY_TYPE_1;
+    e.health = 100;
+    e.max_health = 100;
+    e.x_pos = tile_to_pixel_x(7);
+    e.y_pos = tile_to_pixel_y(7);
+    bombs_set_entity_list(&e);
+
+    bombs_check_player_damage(&map, 7, 7, 60);
+    TEST_ASSERT_EQUAL_INT(40, e.health);  /* raw 60 despite MP + 50% */
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -238,5 +361,9 @@ int main(void)
     RUN_TEST(test_entity_takes_explosion_damage);
     RUN_TEST(test_entity_killed_by_explosion);
     RUN_TEST(test_bomb_detonation_kills_nearby_player);
+    RUN_TEST(test_weak_explosion_destroys_degraded_walls);
+    RUN_TEST(test_two_weak_bombs_destroy_intact_wall);
+    RUN_TEST(test_bomb_damage_pct_scales_mp_player_damage);
+    RUN_TEST(test_bomb_damage_pct_ignored_in_sp_and_for_entities);
     return UNITY_END();
 }

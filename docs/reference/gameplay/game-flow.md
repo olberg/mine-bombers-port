@@ -144,6 +144,33 @@ if minimap_enabled: draw minimap
 | **Hall of Fame** | Single-player game over | Any key → Main Menu |
 | **Pause** | Pause key during gameplay | Pause key again → Resume |
 
+### Options Menu (FUN_1000_1017 / FUN_1000_0140, DOSBox-verified 2026-06-11)
+
+14 rows, cursor (27x11 arrow from SIKA.SPY at 205,99) at X=217,
+Y=(item+4)·24+6, **starting on row 13 (MAINMENU)**. Background
+`OPTIONS5.SPY` (all labels baked in); reference capture:
+`docs/reference/corpus/options-defaults.png`.
+
+| Row | Label | Value display | Bar fill offset (white, X 334..334+w incl.) |
+|-----|-------|---------------|----------------------------------------|
+| 0 | CASH | number | `Trunc(cash/16)` (max 2650) |
+| 1 | TREASURES | number | `Trunc(v*2.2)` |
+| 2 | ROUNDS | number | `v*3` (max 54: bound `v*3 < 0xA5`) |
+| 3 | TIME | `M:SS min` of REAL seconds = `Trunc(ticks·65536/1193182)` | `Trunc(ticks/150)` (max 0x60AE) |
+| 4 | PLAYERS | number | `(n-1)·0x37` |
+| 5 | SPEED | `(33-frame_delay)·3+1` + `%` | `(33-fd)·5` |
+| 6 | BOMB DAMAGE | number + `%` (0-100) | `Trunc(v·1.65)` |
+| 7-10 | DARKNESS / FREE MARKET / SELLING / WINNER | coin sprites | dim coin (SIKA 90,40 15x13) at X=377 AND 443; bright coin (90,53) over the active side. Rows 7-9: on→377; row 10 INVERTED: by-money(0)→377 |
+| 11 | REDEFINE KEYS | opens key config (FUN_1010_d4c4) | |
+| 12 | LOAD LEVELS | opens map select (FUN_1010_e231) | |
+| 13 | MAINMENU | exit (also ESC) | |
+
+Bars/coins sit on 24px rows at Y=101+24i (13px tall); value text color 8 at
+X=400 (rows 0-3) / 408 (rows 4-6), Y=103+24i; bar color 1 (white in the
+OPTIONS5 palette). `D` resets defaults. Keys: arrows/numpad 2-4-6-8
+navigate/adjust; Enter / numpad 3 / PgDn activate. There is NO sound-config
+row — the original configured sound in SETUP.EXE.
+
 ## Single-Player Mode
 
 - 15 levels, loaded from `.MNL` files

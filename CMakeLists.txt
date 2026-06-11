@@ -37,6 +37,7 @@ add_executable(minebombers
     src/debug_overlay.c
     src/autoplay.c
     src/util/prng.c
+    src/util/asset_check.c
     src/loaders/spy_loader.c
     src/loaders/font_loader.c
     src/loaders/sprite_sheet.c

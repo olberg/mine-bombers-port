@@ -85,7 +85,7 @@ bool round_init(Round *r, const char *map_path, int round_number,
                 bool single_player, int time_limit);
 
 /* Initialize a round with a randomly generated map (FUN_1008_1263).
- * treasure_count = config_byte from options (default 45). */
+ * treasure_count = the TREASURES option (default 45). */
 bool round_init_random(Round *r, int round_number, int time_limit,
                        int treasure_count);
 

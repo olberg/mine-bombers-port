@@ -443,6 +443,68 @@ void test_dig_requires_alignment(void)
     TEST_ASSERT_EQUAL_UINT16(old_hp, map.collision[5][4]);
 }
 
+/* --- Dig animation state --- */
+
+/* Pushing against a diggable wall: no movement, but the dig-anim state is
+ * set and the animation counter still advances. The original's
+ * animate_player_sprite (seg_1000:3770) runs on EVERY move_player call
+ * with direction != 0 — mode 1 (dig frames) when the tile ahead on the
+ * movement axis is in the dig-anim wall set and the player is centered on
+ * that axis (move_player tails, e.g. seg_1000:3927-3936). */
+void test_dig_anim_state_while_blocked(void)
+{
+    map.tiles[5][4] = '7';        /* wall above (DIR_UP digs [row][col-1]) */
+    map.collision[5][4] = 3000;
+
+    p.direction = DIR_UP;         /* centered at (5,5) from setUp */
+    p.anim_frame = 0;
+
+    bool moved = player_move(&p, &map);
+    TEST_ASSERT_FALSE(moved);                  /* blocked by the wall */
+    TEST_ASSERT_EQUAL_UINT8(1, p.digging);     /* dig animation active */
+    TEST_ASSERT_EQUAL_INT16(1, p.anim_frame);  /* counter advanced anyway */
+
+    /* Counter keeps running while the key is held against the wall */
+    player_move(&p, &map);
+    player_move(&p, &map);
+    TEST_ASSERT_EQUAL_INT16(3, p.anim_frame);
+    TEST_ASSERT_EQUAL_UINT8(1, p.digging);
+
+    /* Wall gone: same push becomes a normal walk (dig state clears) */
+    map.tiles[5][4] = '0';
+    map.collision[5][4] = 0;
+    moved = player_move(&p, &map);
+    TEST_ASSERT_TRUE(moved);
+    TEST_ASSERT_EQUAL_UINT8(0, p.digging);
+    TEST_ASSERT_EQUAL_INT16(4, p.anim_frame);
+}
+
+/* Dig-anim wall set (move_player tail): includes 'q' (0x71), excludes the
+ * pushable boulder 'B' (0x42) — unlike tile_is_diggable_wall. Off-center
+ * on the movement axis: walk animation even with a wall ahead. */
+void test_dig_anim_wall_set_and_alignment(void)
+{
+    /* 'q' degraded wall IS in the dig-anim set */
+    map.tiles[5][4] = 'q';
+    map.collision[5][4] = 500;
+    p.direction = DIR_UP;
+    player_move(&p, &map);
+    TEST_ASSERT_EQUAL_UINT8(1, p.digging);
+
+    /* 'B' boulder is NOT (original omits 0x42 from the anim check) */
+    map.tiles[5][4] = 'B';
+    player_move(&p, &map);
+    TEST_ASSERT_EQUAL_UINT8(0, p.digging);
+
+    /* Off-center on the movement axis: no dig anim */
+    map.tiles[5][4] = '7';
+    map.collision[5][4] = 3000;
+    p.x_pos = tile_to_pixel_x(5);
+    p.y_pos = tile_to_pixel_y(5) + 2;   /* intra_y != 5 */
+    player_move(&p, &map);
+    TEST_ASSERT_EQUAL_UINT8(0, p.digging);
+}
+
 /* --- Shop gate toggle tiles (0xB4/0xB5): open/close 'l' gate tiles --- */
 void test_shop_gate_toggle_open(void)
 {
@@ -659,6 +721,8 @@ int main(void)
     RUN_TEST(test_dig_wall_degradation_stages);
     RUN_TEST(test_dig_indestructible_wall);
     RUN_TEST(test_dig_requires_alignment);
+    RUN_TEST(test_dig_anim_state_while_blocked);
+    RUN_TEST(test_dig_anim_wall_set_and_alignment);
     RUN_TEST(test_shop_gate_toggle_open);
     RUN_TEST(test_shop_gate_toggle_close);
     RUN_TEST(test_shop_gate_cooldown_prevents_retrigger);

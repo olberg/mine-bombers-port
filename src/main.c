@@ -26,8 +26,10 @@
 #include "debug_overlay.h"
 #include "autoplay.h"
 #include "util/prng.h"
+#include "util/asset_check.h"
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdlib.h>
 
 #define RENDER_WIDTH  640
 #define RENDER_HEIGHT 480
@@ -252,10 +254,10 @@ static void load_round(void)
     if (should_use_random_map()) {
         TraceLog(LOG_INFO, "ROUND: Loading round %d, RANDOM MAP, players=%d, treasures=%d",
                  g_config.total_rounds - rounds_remaining + 1,
-                 g_num_active_players, g_config.config_byte);
+                 g_num_active_players, g_config.treasures);
         ok = round_init_random(&current_round,
                                g_config.total_rounds - rounds_remaining + 1,
-                               time_limit, g_config.config_byte);
+                               time_limit, g_config.treasures);
     } else {
         build_map_path(current_map_index, single_player_mode);
         TraceLog(LOG_INFO, "ROUND: Loading round %d, map=%s, single=%d, players=%d",
@@ -321,6 +323,14 @@ int main(int argc, char *argv[])
     log_file = fopen("minebombers.log", "w");
     SetTraceLogCallback(trace_log);
 
+    /* Fail fast if the game data is missing — before opening the window.
+     * Skips the runtime-generated settings/saves (OPTIONS.CFG, keybinds.dat,
+     * SOUNDCFG.DAT, PLAYERS.DAT, IDENTIFY.DAT, HALLOFFA.DAT). */
+    if (!asset_check_startup("assets")) {
+        if (log_file) fclose(log_file);
+        return 1;
+    }
+
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Mine Bombers");
     SetTargetFPS(60);
     SetExitKey(0);  /* Disable ESC-to-close; game uses ESC for navigation */
@@ -360,8 +370,19 @@ int main(int argc, char *argv[])
         music_play();
     }
 
-    change_state(&state, STATE_TITLE);
-    title_init();
+    /* MB_SHOT_OPTIONS=<file.png>: boot straight into the options screen,
+     * export the native render texture after the fade settles, then exit.
+     * Visual-fidelity harness knob (mirrors the F12 export). */
+    const char *shot_options = getenv("MB_SHOT_OPTIONS");
+    int shot_options_frames = 0;
+    if (shot_options) {
+        music_stop();
+        options_init();
+        change_state(&state, STATE_OPTIONS);
+    } else {
+        change_state(&state, STATE_TITLE);
+        title_init();
+    }
 
     while (state != STATE_QUIT && !WindowShouldClose()) {
         if (state != STATE_KEY_CONFIG) input_update();
@@ -850,6 +871,16 @@ int main(int argc, char *argv[])
                 debug_draw(NULL, 0);
             }
         EndDrawing();
+
+        if (shot_options && state == STATE_OPTIONS) {
+            if (++shot_options_frames == 90) {
+                Image shot = LoadImageFromTexture(target.texture);
+                ImageFlipVertical(&shot);
+                ExportImage(shot, shot_options);
+                UnloadImage(shot);
+                change_state(&state, STATE_QUIT);
+            }
+        }
 
         /* F12 = screenshot of render texture (native res) */
         if (IsKeyPressed(KEY_F12)) {

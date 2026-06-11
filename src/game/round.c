@@ -298,6 +298,12 @@ int round_resolve_direction(int player_idx, int current_direction)
 
 static void process_player_input(Player *p, int player_idx)
 {
+    /* Facing := direction at the head of the weapon tick (process_weapons,
+     * seg_1000:2602-2604) — independent of movement success, so pushing
+     * against a wall turns the sprite toward it. Runs BEFORE the key
+     * re-resolution below, preserving the original's one-tick lag. */
+    if (p->direction != DIR_STOP)
+        p->last_direction = p->direction;
     p->direction = (uint8_t)round_resolve_direction(player_idx, p->direction);
 }
 
@@ -339,11 +345,15 @@ static void round_begin_fade_out(Round *r)
     r->fade_step = 0;
 }
 
-/* Bomb input latch: captures IsKeyPressed on any frame so the every-2-frames
- * bomb placement check doesn't miss presses on odd frames. Cleared when a new
- * round starts (ROUND_FADE_IN → ROUND_RUNNING transition).
- * Decompiled ref: seg_1000:2631-2632 reads key_state then clears (one-shot). */
+/* One-shot key latches: capture IsKeyPressed on any frame so the
+ * every-2-frames weapon tick doesn't miss presses on odd frames (raylib's
+ * edge is true for exactly one frame, while the original's ISR key byte
+ * stays set from key-make until the handler consumes it). Cleared when a
+ * new round starts (ROUND_FADE_IN → ROUND_RUNNING transition).
+ * Decompiled ref: bomb seg_1000:2631-2632, choose seg_1000:2795-2796 —
+ * both read key_state then clear (one-shot). */
 static bool bomb_latch[MAX_PLAYERS];
+static bool cycle_latch[MAX_PLAYERS];
 
 RoundState round_update(Round *r, Player players[], int num_players)
 {
@@ -354,8 +364,9 @@ RoundState round_update(Round *r, Player players[], int num_players)
         r->fade_step++;
         if (r->fade_step >= ROUND_FADE_STEPS) {
             r->state = ROUND_RUNNING;
-            /* Clear any stale bomb latches from previous round */
+            /* Clear any stale key latches from previous round */
             memset(bomb_latch, 0, sizeof(bomb_latch));
+            memset(cycle_latch, 0, sizeof(cycle_latch));
         }
         return r->state;
     }
@@ -427,10 +438,13 @@ RoundState round_update(Round *r, Player players[], int num_players)
     }
 
     /* === Every frame === */
-    /* Latch bomb key press so the every-2-frames check doesn't miss it. */
+    /* Latch one-shot key presses so the every-2-frames check doesn't miss
+     * them. */
     for (int i = 0; i < num_players && i < MAX_PLAYERS; i++) {
         if (player_input_pressed(i, PLAYER_INPUT_BOMB))
             bomb_latch[i] = true;
+        if (player_input_pressed(i, PLAYER_INPUT_CYCLE))
+            cycle_latch[i] = true;
     }
 
     /* Movement runs every frame; key reads (direction, bomb, choose,
@@ -497,8 +511,10 @@ RoundState round_update(Round *r, Player players[], int num_players)
                 }
             }
 
-            /* Weapon cycling — one-shot (original clears the key byte) */
-            if (player_input_pressed(i, PLAYER_INPUT_CYCLE)) {
+            /* Weapon cycling — latched across frames like the bomb key;
+             * one-shot (original clears the key byte on consume). */
+            if (cycle_latch[i]) {
+                cycle_latch[i] = false;
                 player_cycle_weapon(&players[i], 1);
             }
 
@@ -716,19 +732,30 @@ void round_draw(Round *r, const Player players[], int num_players)
         int draw_x = players[i].x_pos;
         int draw_y = players[i].y_pos + shake_offset;
         if (draw_y >= -SPRITE_H && draw_y < 480 + SPRITE_H) {
-            int dir = players[i].last_direction;
+            /* Sprite band: moving uses the CURRENT direction (+0xA4,
+             * animate_player_sprite); stopped uses FACING (+0xA6,
+             * move_player's standing blit at seg_1000:3893-3898). */
+            bool moving = (players[i].direction != DIR_STOP);
+            int dir = moving ? players[i].direction : players[i].last_direction;
             if (dir < 0 || dir > 4) dir = 0;
             int spr_dir = dir_to_spr[dir];
+
             /* Map 0-30 anim_frame to 0-3 sprite frame via 6 thresholds:
-             * 0-4→0, 5-9→1, 10-14→2, 15-19→3, 20-24→2, 25-29→1 (ping-pong) */
-            int af = players[i].anim_frame;
+             * 0-4→0, 5-9→1, 10-14→2, 15-19→3, 20-24→2, 25-29→1 (ping-pong;
+             * same thresholds for walk and dig — animate_player_sprite
+             * modes 0 and 1). Stopped: standing frame 0. */
             int frame;
-            if (af < 5)       frame = 0;
-            else if (af < 10) frame = 1;
-            else if (af < 15) frame = 2;
-            else if (af < 20) frame = 3;
-            else if (af < 25) frame = 2;
-            else              frame = 1;
+            if (!moving) {
+                frame = 0;
+            } else {
+                int af = players[i].anim_frame;
+                if (af < 5)       frame = 0;
+                else if (af < 10) frame = 1;
+                else if (af < 15) frame = 2;
+                else if (af < 20) frame = 3;
+                else if (af < 25) frame = 2;
+                else              frame = 1;
+            }
 
             int variant;
             if (players[i].cheat_visual == CHEAT_MUTATION) {
@@ -736,12 +763,17 @@ void round_draw(Round *r, const Player players[], int num_players)
                  * Original (FUN_1000_3129) copies DAT_1038_2352 (monster variant
                  * 11 loaded at seg_1010:4869) into player sprite data. */
                 variant = 10;
+            } else if (moving && players[i].digging) {
+                /* Digging: per-player DIG sprite set (loader calls 5-8 at
+                 * seg_1010:4863-4866 fill player +0x62, which is what
+                 * animate_player_sprite mode 1 draws from). */
+                variant = 4 + i;
             } else {
-                /* Sprite color variant = player_index + option_toggle[i] * 4.
-                 * Sets 0-3: STD colors, Sets 4-7: ALT colors per player.
-                 * Each option_toggle doubles as the sprite color set for its
-                 * corresponding player (original dual-use design). */
-                variant = i + g_config.option_toggle[i] * 4;
+                /* Walk sets 0-3. (Sets 4-7 were previously misread as
+                 * option_toggle-selected ALT colors; the loader proves they
+                 * are the dig sets, and option_toggle[] holds the game
+                 * options, not colors.) */
+                variant = i;
             }
             Rectangle src = sprites_get_player_rect(variant, spr_dir, frame);
             DrawTextureRec(atlas, src, (Vector2){draw_x, draw_y}, WHITE);

@@ -8,7 +8,8 @@
  * See decompiled/FILE_FORMATS.md for layout. */
 typedef struct {
     uint8_t  num_players;      /* 0x00: 1-4 */
-    uint8_t  config_byte;      /* 0x01: game option flags */
+    uint8_t  treasures;      /* 0x01: TREASURES count (options row 1;
+                              * "config_byte bitfield" was a guess) */
     int16_t  total_rounds;     /* 0x02: min 1 */
     int16_t  starting_cash;    /* 0x04: MP starting wallet, 0-2650 step 100.
                                 * Mislabeled "g_speed_setting" in decompiled
@@ -21,7 +22,9 @@ typedef struct {
     uint8_t  option_toggle[4]; /* 0x0C-0x0F: [0]=darkness, [1]=free_market,
                                 *            [2]=selling,  [3]=winner_by
                                 * Mislabeled as "player_color" in decompiled code. */
-    uint8_t  starting_lives;   /* 0x10 */
+    uint8_t  bomb_damage_pct;  /* 0x10: BOMB DAMAGE % (options row 6,
+                                * 0-100; "starting_lives" was a
+                                * decompiler mislabel) */
 } GameConfig;
 
 /* Global game configuration */

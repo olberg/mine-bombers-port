@@ -153,8 +153,11 @@ static void draw_player_panel(const Player *p, int px, int py)
 
     /* Ammo count at (panel_x, 0), overlaying weapon sprite's top-left.
      * draw_game_hud (seg_1010:3674+) prints the inventory count for the
-     * currently selected weapon. No weapon-name text in the original. */
-    int widx = weapon_inv_index(p->selected_weapon);
+     * currently selected weapon — including signature bombs (+0xB8/+0xBA
+     * cases at seg_1010:3778-3796). player_weapon_index resolves sig tiles
+     * to their slots; weapon_inv_index returned -1 for them, which left
+     * remote/signature bombs with NO count in the HUD. */
+    int widx = player_weapon_index(p->selected_weapon);
     if (widx >= 0) {
         snprintf(buf, sizeof(buf), "%d", (int)p->weapons[widx]);
         DrawTextFON(&hud_font, buf, px, py, text_col);

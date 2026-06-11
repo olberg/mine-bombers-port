@@ -144,6 +144,34 @@ Direction when placed determines tile value:
 - **Proximity mine movement** ('o'/0x6F, seg_1010:2131-2166): On "detonation", mines do NOT explode. Instead they **move/spread** to an adjacent passable tile. Algorithm: (1) new fuse = random(140)+1, (2) direction = fuse%4 (0=row+1, 1=row-1, 2=col+1, 3=col-1), (3) if adjacent tile is passable ('0','f',0xAF), place a new mine copy with same fuse and collision=400, (4) current mine stays alive with the new fuse. This creates a creeping mine field that spreads across open floor.
 - **Creature spawner flood-fill** (0xA1 seg_1010:1104-1211, 0x81 seg_1010:1849-1950): Timer bomb (0xA1) and super bomb (0x81) create an expanding area of creature spawner tiles via layered flood-fill. Algorithm: (1) mark center as 0x88, (2) iterate up to 50 (0xA1) or 45 (0x81) times scanning entire map for 0x88 tiles and placing 0x89 on adjacent passable tiles, (3) convert all 0x89→0x88 each iteration, (4) stop when no new tiles added, (5) final pass: all 0x88→0xA0 with collision=400 and overlay=0xFA (250), except center→'0'. Sound: trigger #10 (urethan).
 
+### Explosion vs Walls (FUN_1010_1326, verified 2026-06-11)
+
+Wall classification at seg_1010:772 covers **only intact walls** `'7'-'9'`
+and `'A'-'F'`:
+
+- **Weak hit on an intact wall** (seg_1010:799-809): collision SET to 500
+  and tile → `'q'`, or (50%, `Random(2)`) collision 1000 and tile → `'p'`.
+  Prior dig damage is overwritten, not accumulated.
+- **Weak hit on a degraded wall** (`'p'`, `'q'`, `'5'`, `'6'`): NOT in the
+  wall set — falls through to the fire branch (seg_1010:775-778) and is
+  **destroyed**. This is the classic two-bomb wall kill.
+- **Weak hit on reinforced** (0xAC/0xAD/0xAE, seg_1010:780-792): degrade
+  one stage (collision 4000 → 2000 → destroyed).
+- **Strong hit** (mines, mega/rocket expansion, param_2=1): any wall →
+  fire immediately.
+
+All standard bombs (small/medium/large/signature) are weak mode; the
+BOMB DAMAGE % option plays no part in wall damage.
+
+### BOMB DAMAGE % Option (seg_1010:5378-5386, verified 2026-06-11)
+
+The options-screen BOMB DAMAGE % value (config offset 0x10) scales
+**player** explosion damage in **multiplayer only**: with `num_players < 2`
+the raw per-bomb damage is subtracted; otherwise the subtraction routes
+through the Pascal real RTL (FUN_1030_1545/1537/1549 = load → multiply →
+Trunc), i.e. `health -= Trunc(damage * pct/100)`. Entities/monsters always
+take raw damage (seg_1010:5442). Walls are unaffected (stage-based, above).
+
 ### Dig Damage Formula (seg_1000:3722-3724)
 ```
 collision_value -= (digging_power + bonus_stat)

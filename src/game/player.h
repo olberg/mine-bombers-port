@@ -108,6 +108,11 @@ typedef struct {
 
     /* Animation */
     int16_t  anim_frame;
+    uint8_t  digging;           /* dig-animation state, recomputed by
+                                   player_move each frame: centered on the
+                                   movement axis with a diggable wall ahead
+                                   (move_player tails, e.g. seg_1000:3927-3936).
+                                   Selects the dig sprite set when drawing. */
     int16_t  cooldown;
 
     /* Key bindings (Raylib key codes at runtime) */

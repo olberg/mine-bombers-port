@@ -45,10 +45,10 @@ bool sprites_has_tile(uint8_t tile_byte);
  * Player sprites are 10x10, arranged horizontally in the sheet:
  *   X = x_base + direction * 40 + frame * 10
  *   Y = y_base
- * Sets 0-3: STD colors for players 1-4 (option_toggle[i]=0)
- * Sets 4-7: ALT colors for players 1-4 (option_toggle[i]=1)
+ * Sets 0-3: WALK sets for players 1-4
+ * Sets 4-7: DIG sets for players 1-4 (drawn while pushing a diggable wall)
  * Sets 8-11: Monster sprite variants
- * Mapping: variant = player_index + option_toggle[player_index] * 4
+ * Mapping: walk variant = player_index, dig variant = 4 + player_index
  */
 #define PLAYER_SPRITE_DIRS   4   /* right, left, up, down */
 #define PLAYER_SPRITE_FRAMES 4

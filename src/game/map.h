@@ -40,7 +40,7 @@ void map_init_collision(TileMap *map);
 uint8_t map_get_tile(const TileMap *map, int row, int col);
 
 /* Generate a random map procedurally (FUN_1008_1263).
- * treasure_count = number of treasure items to place (from g_config_byte).
+ * treasure_count = number of treasure items to place (the TREASURES option, g_config.treasures).
  * Call map_init_collision() after this. */
 void map_generate_random(TileMap *map, int treasure_count);
 

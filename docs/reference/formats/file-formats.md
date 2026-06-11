@@ -14,7 +14,7 @@ compatibility verified for defaults).
 | Offset | Size | Field | Notes |
 |--------|------|-------|-------|
 | 0x00 | 1 | num_players | 1-4 |
-| 0x01 | 1 | config_byte | Bitfield: game options flags |
+| 0x01 | 1 | config_byte | TREASURES count (options screen row 1; "bitfield" was a guess) |
 | 0x02 | 2 | total_rounds | int16, forced to min 1 on load |
 | 0x04 | 2 | starting_cash | int16 — "speed_setting" was a decompiler mislabel |
 | 0x06 | 2 | time_limit_lo | int16, **PIT ticks** (18.2065 Hz, 54.9 ms each; NOT seconds) |
@@ -24,9 +24,9 @@ compatibility verified for defaults).
 | 0x0D | 1 | option_free_market | |
 | 0x0E | 1 | option_selling | |
 | 0x0F | 1 | option_winner_by | |
-| 0x10 | 1 | starting_lives | base health (100) |
+| 0x10 | 1 | bomb_damage_pct | BOMB DAMAGE % (options screen row 6, range 0-100; "starting_lives" was a decompiler mislabel) |
 
-**Defaults (if file missing):** num_players=2, config_byte=0x2D, total_rounds=15, starting_cash=750, time_limit=0x1DEE (7662 ticks = 7 min 01 s), frame_delay=8, starting_lives=100, all option toggles=0. A game-written defaults file is `02 2D 0F 00 EE 02 EE 1D 00 00 08 00 00 00 00 00 64` (captured from the original).
+**Defaults (if file missing):** num_players=2, treasures=0x2D (45), total_rounds=15, starting_cash=750, time_limit=0x1DEE (7662 ticks = 7 min 01 s — the options screen displays it as real time "7:00 Min"), frame_delay=8, bomb_damage=100%, all option toggles=0. A game-written defaults file is `02 2D 0F 00 EE 02 EE 1D 00 00 08 00 00 00 00 00 64` (captured from the original).
 
 ## Player Database — `players.dat` (3,232 bytes)
 

@@ -41,6 +41,21 @@ static bool move_passable(const TileMap *map, int row, int col)
  * to enter the next tile. The perpendicular axis is always snapped to tile
  * center (intra = 5).
  */
+/*
+ * Wall set for the DIG ANIMATION check at the tail of each move_player
+ * direction case (e.g. seg_1000:3927-3936 for LEFT): '7'-'9', 'A',
+ * 'C'-'F', 'p', 'q', 0xAC-0xAE. Note this differs from both
+ * tile_is_diggable_wall (degradation visuals) and tile_in_dig_wall_set
+ * (dig vs push dispatch): it includes 'q' (0x71) and excludes 'B' (0x42).
+ */
+static bool tile_is_dig_anim_wall(uint8_t t)
+{
+    return (t >= 0x37 && t <= 0x39) || t == 0x41 ||
+           (t >= 0x43 && t <= 0x46) ||
+           t == 0x70 || t == 0x71 ||
+           (t >= 0xAC && t <= 0xAE);
+}
+
 bool player_move(Player *p, TileMap *map)
 {
     if (p->dead || p->direction == DIR_STOP) return false;
@@ -147,12 +162,41 @@ bool player_move(Player *p, TileMap *map)
     }
     }
 
-    if (primary_moved) {
-        p->last_direction = p->direction;
-        p->anim_frame++;
-        if (p->anim_frame >= 30)
-            p->anim_frame = 0;
+    /* Dig-animation state — the tail of each original direction case checks
+     * the tile AHEAD on the movement axis against the dig-anim wall set,
+     * gated on being centered on that axis (intra == 5), using the
+     * intra/tile values captured BEFORE this frame's movement. NOTE: facing
+     * (+0xA6 / last_direction) is NOT updated here — the original does that
+     * at the head of the weapon tick (process_weapons seg_1000:2602-2604),
+     * which is what turns the sprite toward a wall it never moves into. */
+    bool digging = false;
+    if (p->direction == DIR_UP || p->direction == DIR_DOWN) {
+        if (intra_y == 5) {
+            int ahead = tile_col + (p->direction == DIR_DOWN ? 1 : -1);
+            if (ahead >= 0 && ahead < MAP_COLS)
+                digging = tile_is_dig_anim_wall(map->tiles[tile_row][ahead]);
+        }
+    } else {
+        if (intra_x == 5) {
+            int ahead = tile_row + (p->direction == DIR_RIGHT ? 1 : -1);
+            if (ahead >= 0 && ahead < MAP_ROWS)
+                digging = tile_is_dig_anim_wall(map->tiles[ahead][tile_col]);
+        }
     }
+    p->digging = digging ? 1 : 0;
+
+    /* The animation counter advances EVERY frame a direction is held —
+     * also while blocked/digging: animate_player_sprite (seg_1000:3770)
+     * runs on every move_player call with direction != 0 and increments
+     * +0xA2 at the end. While digging, the pickaxe clink plays once per
+     * cycle at counter 16 (seg_1000:3855-3858: trigger #8 at
+     * 11000+random(100) Hz). */
+    if (p->digging && p->anim_frame == 16) {
+        sfx_play(SFX_PICAXE);
+    }
+    p->anim_frame++;
+    if (p->anim_frame >= 30)
+        p->anim_frame = 0;
 
     return primary_moved;
 }

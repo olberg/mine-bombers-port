@@ -68,6 +68,24 @@ Notes:
   fame, options) in the original binary formats inside `assets/`, so files
   remain compatible with the original game.
 
+## Default controls
+
+Default key bindings match the DOS original. Players 1 and 2:
+
+| Action | Player 1 | Player 2 |
+|---|---|---|
+| Move up / down | Numpad 8 / Numpad 2 | W / X |
+| Move left / right | Numpad 4 / Numpad 6 | A / D |
+| Stop | Numpad 5 | S |
+| Drop bomb (buy in shop) | Page Down | Tab |
+| Remote detonate | Numpad 1 | Z |
+| Choose / sell weapon | Page Up | `` ` `` (key left of 1) |
+
+All bindings (players 1–4) can be changed in the options menu (REDEFINE
+KEYS). Press F2 on the options screen for the sound settings — the original
+configured sound in a separate SETUP.EXE, so the options menu has no row
+for it.
+
 ## Tests
 
 ```

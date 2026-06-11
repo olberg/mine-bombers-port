@@ -123,23 +123,26 @@ static const TileSpriteEntry TILE_SPRITES[] = {
  *   capture_screen_region(buf, param_3+9, dir*40+param_4+frame*10+9, param_3, ...)
  *   → param_3 = Y coord, param_4 = X base (horizontal)
  *
- * Sets 0-3: STD colors for players 1-4 (option_toggle[i]=0)
- * Sets 4-7: ALT colors for players 1-4 (option_toggle[i]=1)
- * Sets 8-11: Monster sprite variants
+ * Sets 0-3: WALK sets for players 1-4 (loader seg_1010:4859-4862,
+ *           written to player struct +0x22)
+ * Sets 4-7: DIG sets for players 1-4 (loader seg_1010:4863-4866,
+ *           written to player +0x62 — what animate_player_sprite mode 1
+ *           draws while digging). Previously mislabeled "ALT colors".
+ * Sets 8-11: Monster sprite variants (seg_1010:4867-4870)
  */
 typedef struct {
     int x_base, y_base;
 } PlayerSpriteSet;
 
 static const PlayerSpriteSet PLAYER_SETS[12] = {
-    { 160,  10 },  /* Set 0  (P1 STD): param_3=10(Y),   param_4=0xA0=160(X) */
-    { 160,   0 },  /* Set 1  (P2 STD): param_3=0(Y),    param_4=0xA0=160(X) */
-    { 160,  30 },  /* Set 2  (P3 STD): param_3=0x1E(Y), param_4=0xA0=160(X) */
-    { 160,  40 },  /* Set 3  (P4 STD): param_3=0x28(Y), param_4=0xA0=160(X) */
-    { 160, 200 },  /* Set 4  (P1 ALT): param_3=200(Y),  param_4=0xA0=160(X) */
-    {   0, 200 },  /* Set 5  (P2 ALT): param_3=200(Y),  param_4=0(X)        */
-    {   0, 210 },  /* Set 6  (P3 ALT): param_3=0xD2(Y), param_4=0(X)        */
-    { 160, 210 },  /* Set 7  (P4 ALT): param_3=0xD2(Y), param_4=0xA0=160(X) */
+    { 160,  10 },  /* Set 0  (P1 WALK): param_3=10(Y),   param_4=0xA0=160(X) */
+    { 160,   0 },  /* Set 1  (P2 WALK): param_3=0(Y),    param_4=0xA0=160(X) */
+    { 160,  30 },  /* Set 2  (P3 WALK): param_3=0x1E(Y), param_4=0xA0=160(X) */
+    { 160,  40 },  /* Set 3  (P4 WALK): param_3=0x28(Y), param_4=0xA0=160(X) */
+    { 160, 200 },  /* Set 4  (P1 DIG):  param_3=200(Y),  param_4=0xA0=160(X) */
+    {   0, 200 },  /* Set 5  (P2 DIG):  param_3=200(Y),  param_4=0(X)        */
+    {   0, 210 },  /* Set 6  (P3 DIG):  param_3=0xD2(Y), param_4=0(X)        */
+    { 160, 210 },  /* Set 7  (P4 DIG):  param_3=0xD2(Y), param_4=0xA0=160(X) */
     { 160,  50 },  /* Set 8  (Mon 1):  param_3=0x32(Y), param_4=0xA0=160(X) */
     { 160,  60 },  /* Set 9  (Mon 2):  param_3=0x3C(Y), param_4=0xA0=160(X) */
     { 160,  70 },  /* Set 10 (Mon 3):  param_3=0x46(Y), param_4=0xA0=160(X) */

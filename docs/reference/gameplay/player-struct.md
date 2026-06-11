@@ -29,6 +29,14 @@ Reconstructed from how the code accesses player data relative to the base pointe
 | +0x1D | 2 | health | `DAT_1038_1c07 = steel_plates * 100 + 100` (seg_1010:7090) |
 | +0x21 | 1 | dead flag | `cmp byte [1C0B],0` in FUN_1000_a17c (MB.EXE file offset 45464) |
 
+### Sprite pointer tables (verified 2026-06-11)
+
+| Offset | Size | Field | Evidence |
+|--------|------|-------|----------|
+| +0x22 | 16×4 | WALK frame pointers (4 dirs × 4 frames) | loader writes 0x1C0C/0x1D16/0x1E20/0x1F2A = P1..P4+0x22 (seg_1010:4859-4862); read at `+0xA4*0x10+0x12` by animate_player_sprite mode 0 |
+| +0x62 | 16×4 | DIG frame pointers (4 dirs × 4 frames) | loader writes 0x1C4C/0x1D56/0x1E60/0x1F6A = P1..P4+0x62 (seg_1010:4863-4866); read at `+0xA4*0x10+0x52` by animate_player_sprite mode 1 |
+| +0xA2 | 2 | animation counter (0-29, ping-pong frame map) | incremented every move_player call with direction != 0 (seg_1000:3862) |
+
 ### Money & scoring fields (verified 2026-06-10)
 
 | Offset | Size | Field | Evidence |

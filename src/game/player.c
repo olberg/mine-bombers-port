@@ -114,6 +114,7 @@ void player_reset_for_round(Player *p)
     p->active = 1;
     p->direction = DIR_STOP;
     p->anim_frame = 0;
+    p->digging = 0;
     p->cooldown = 0;
     p->money_bomb_counter = 0;
     p->x_velocity = 0;

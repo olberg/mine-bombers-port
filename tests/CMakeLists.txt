@@ -77,7 +77,8 @@ add_unity_test(test_map_loader test_map_loader.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
     ${CMAKE_SOURCE_DIR}/src/loaders/voc_loader.c
-    ${CMAKE_SOURCE_DIR}/src/util/prng.c)
+    ${CMAKE_SOURCE_DIR}/src/util/prng.c
+    ${CMAKE_SOURCE_DIR}/src/game/config.c)
 
 # Player test
 add_unity_test(test_player test_player.c
@@ -126,7 +127,8 @@ add_unity_test(test_movement test_movement.c
     ${CMAKE_SOURCE_DIR}/src/game/entity.c
     ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
     ${CMAKE_SOURCE_DIR}/src/loaders/voc_loader.c
-    ${CMAKE_SOURCE_DIR}/src/util/prng.c)
+    ${CMAKE_SOURCE_DIR}/src/util/prng.c
+    ${CMAKE_SOURCE_DIR}/src/game/config.c)
 
 # Entity test
 add_unity_test(test_entity test_entity.c
@@ -142,7 +144,8 @@ add_unity_test(test_entity test_entity.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
     ${CMAKE_SOURCE_DIR}/src/loaders/voc_loader.c
-    ${CMAKE_SOURCE_DIR}/src/util/prng.c)
+    ${CMAKE_SOURCE_DIR}/src/util/prng.c
+    ${CMAKE_SOURCE_DIR}/src/game/config.c)
 
 # AI test
 add_unity_test(test_ai test_ai.c
@@ -159,7 +162,8 @@ add_unity_test(test_ai test_ai.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
     ${CMAKE_SOURCE_DIR}/src/loaders/voc_loader.c
-    ${CMAKE_SOURCE_DIR}/src/util/prng.c)
+    ${CMAKE_SOURCE_DIR}/src/util/prng.c
+    ${CMAKE_SOURCE_DIR}/src/game/config.c)
 
 # Bombs test
 add_unity_test(test_bombs test_bombs.c
@@ -175,7 +179,8 @@ add_unity_test(test_bombs test_bombs.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
     ${CMAKE_SOURCE_DIR}/src/loaders/voc_loader.c
-    ${CMAKE_SOURCE_DIR}/src/util/prng.c)
+    ${CMAKE_SOURCE_DIR}/src/util/prng.c
+    ${CMAKE_SOURCE_DIR}/src/game/config.c)
 
 # HUD test
 add_unity_test(test_hud test_hud.c
@@ -275,7 +280,8 @@ add_unity_test(test_random_map test_random_map.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
     ${CMAKE_SOURCE_DIR}/src/loaders/voc_loader.c
-    ${CMAKE_SOURCE_DIR}/src/util/prng.c)
+    ${CMAKE_SOURCE_DIR}/src/util/prng.c
+    ${CMAKE_SOURCE_DIR}/src/game/config.c)
 
 # Explosion damage test
 add_unity_test(test_explosion_damage test_explosion_damage.c
@@ -291,7 +297,8 @@ add_unity_test(test_explosion_damage test_explosion_damage.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
     ${CMAKE_SOURCE_DIR}/src/loaders/voc_loader.c
-    ${CMAKE_SOURCE_DIR}/src/util/prng.c)
+    ${CMAKE_SOURCE_DIR}/src/util/prng.c
+    ${CMAKE_SOURCE_DIR}/src/game/config.c)
 
 # Visibility / fog-of-war test
 add_unity_test(test_visibility test_visibility.c
