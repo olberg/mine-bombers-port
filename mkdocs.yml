@@ -1,0 +1,33 @@
+site_name: Mine Bombers Port — Knowledge Base
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Reference:
+    - Formats:
+      - File Formats: reference/formats/file-formats.md
+      - SPY Format Analysis: reference/formats/spy-format-analysis.md
+      - SPY Files Summary: reference/formats/spy-files-summary.md
+    - Rendering:
+      - Graphics Pipeline: reference/rendering/graphics-pipeline.md
+      - Multiplayer Camera: reference/rendering/multiplayer-camera.md
+    - Gameplay:
+      - Game Mechanics: reference/gameplay/game-mechanics.md
+      - Game Flow: reference/gameplay/game-flow.md
+      - Player Struct: reference/gameplay/player-struct.md
+      - Function Map: reference/gameplay/function-map.md
+    - Input:
+      - Input System: reference/input/input-system.md
+      - Input Binding Philosophy: reference/input/input-binding-philosophy.md
+    - AI:
+      - AI Behavior: reference/ai/ai-behavior.md
+    - Audio:
+      - Music System: reference/audio/music-system.md
+    - Testing:
+      - DOSBox Setup: reference/testing/dosbox-setup.md
+      - DOSBox-X Automation: reference/testing/dosbox-automation.md

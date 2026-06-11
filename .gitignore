@@ -1,0 +1,29 @@
+# Whitelist policy: this repository publishes only the port itself.
+# Everything at the repo root is ignored by default; public content
+# is re-included explicitly below.
+/*
+!/.gitignore
+!/CMakeLists.txt
+!/README.md
+!/LICENSE.md
+!/mkdocs.yml
+!/src/
+!/tests/
+!/docs/
+
+# Within docs/, only the index, the architecture overview, and the
+# reference pages are public.
+/docs/*
+!/docs/index.md
+!/docs/architecture.md
+!/docs/reference/
+
+# Generic guards for scratch files and captures inside whitelisted
+# directories.
+*.txt
+!CMakeLists.txt
+*.log
+*.png
+
+# README screenshot (port's own rendering)
+!/docs/screenshot-shop.png
