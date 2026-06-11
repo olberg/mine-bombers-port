@@ -1,4 +1,5 @@
 Required Notice: Copyright 2026 Olli Sikstus
+
 Required Notice: Mine Bombers is copyright 1995-2001 Skitso Productions. This software is an unofficial fan recreation; all credit for the game's design, graphics, sound, and music belongs to the original authors.
 
 ## About the original game

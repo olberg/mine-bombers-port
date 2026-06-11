@@ -4,26 +4,27 @@ Reverse-engineered from `seg_1000_game_logic.c` and `seg_1010_graphics.c`.
 
 ## Architecture Overview
 
-The game has two separate AI systems:
-1. **Bot AI personalities** — named player profiles that modify stats (not true AI decision-making)
-2. **Monster AI** — autonomous entity pathfinding and combat, used for both single-player monsters and player-spawned creatures
+The game has exactly one AI system: **monster AI** — autonomous entity pathfinding and combat, used for both map-spawned monsters and player-spawned creatures. It runs inside `monster_player_collision()` (seg_1000:5803).
 
-`apply_bot_ai()` (seg_1010:6987) is **not** the AI brain — it's a pre-round betting/spectator screen. The actual monster/entity AI runs inside `monster_player_collision()` (seg_1000:5803).
+Two corrections to earlier AI-assisted analysis of the decompiled sources (an older model misread these, and the errors propagated through earlier revisions of this page):
 
-## Bot AI Personalities
+1. The named player profiles (Lottery, Skitso, Rambo, Invis, Pyroman, Mutation), previously described here as "bot AI personalities", are **cheat codes** — special player names that grant stat or visual bonuses at round start. No AI involved.
+2. `apply_bot_ai()` (seg_1010:6987) is not an AI routine despite its decompiled name — it's the pre-round **shop screen** (it renders up to two player purchase panels per page; the first parameter selects solo vs paired layout).
 
-Activated by `FUN_1000_318d()` (seg_1000:2042) when a player's name matches a known AI name from `players.dat`:
+## Cheat-Code Player Names
+
+Applied by `FUN_1000_318d()` (seg_1000:2042) when a player's name (case-insensitive) matches one of six built-in cheat codes. They apply to **any** player — human or not — whose name matches:
 
 | Name | Effect |
 |------|--------|
-| **Lottery** | Sets score to 50,000. High-risk gambler. |
-| **Skitso** | Sets all 27 weapon slots to 50 each. Random arsenal. |
-| **Rambo** | Sets health to 32,000. Extremely tanky. |
-| **Invis** | Copies a transparent sprite into all 16 sprite slots. Invisible player. |
-| **Pyroman** | Sets bomb capacity (offset 0xC0) to 1000. Unlimited bombs. |
-| (6th name) | Custom visual skin (copies 64 bytes into sprite arrays). |
+| **Lottery** | Sets cash to 50,000. |
+| **Skitso** | Sets all 27 weapon slots to 50 each, plus one of each dig tool (rock pick, large rock pick, power drill). |
+| **Rambo** | Sets health and max health to 32,000. |
+| **Invis** | Copies the floor sprite into all 16 player sprite slots — the player is invisible. |
+| **Pyroman** | Sets directional rockets (offset 0xC0) to 1000. |
+| **Mutation** | Copies a monster sprite set ("Mon 3") over the player's sprites — the player looks like a monster. |
 
-These are stat modifications applied at round start, not behavioral AI. The actual movement/combat decisions come from the monster AI system.
+These are one-shot stat/visual modifications applied at round init, not behavioral AI. The in-game info screens document them on a hidden page (`CODES.SPY`, shown when Tab is pressed on the fourth info image).
 
 ## Monster Entity Structure
 
@@ -38,7 +39,7 @@ Each monster is a **265-byte (0x109) struct** in a linked list (head at `DAT_103
 | +0x22 | 64 | Sprite table 1 |
 | +0x62 | 64 | Sprite table 2 |
 | +0xA2 | 2 | Animation state |
-| +0xA4 | 2 | Current direction (1=left, 2=right, 3=up, 4=down) |
+| +0xA4 | 2 | Current direction (1=right, 2=left, 3=up, 4=down) |
 | +0xA6 | 2 | Previous direction |
 | +0xA8 | 2 | Base attack power |
 | +0xAC | 2 | Bonus attack power |
@@ -51,26 +52,25 @@ Each monster is a **265-byte (0x109) struct** in a linked list (head at `DAT_103
 
 ## Monster Types
 
-Spawned from tile map characters 'G'-'V' (0x47-0x56):
+Spawned from tile map characters 'G'-'V' (0x47-0x56). The speed divisor throttles movement: the entity moves on every frame where `frame % divisor != 0`, so a **higher divisor means a faster monster** (divisor 100 → moves 99 of every 100 frames; divisor 2 → moves every other frame).
 
-| Tiles | Template | Speed Divisor | Notes |
-|-------|----------|---------------|-------|
-| G-J (0x47-0x4A) | KarvaMies | 6 | Fast, type 2 |
-| K-N (0x4B-0x4E) | Creature 2 | 3 | Faster, type 3 |
-| O-R (0x4F-0x52) | Creature 3 | 2 | Very fast, aggro range 10 |
-| S-V (0x53-0x56) | Alien | 100 | Very slow but powerful, aggro range 66 |
+| Tiles | Template | Speed Divisor | Health | Attack | Notes |
+|-------|----------|---------------|--------|--------|-------|
+| G-J (0x47-0x4A) | KarvaMies | 6 | 29 | 2 | Moves 5 of 6 frames |
+| K-N (0x4B-0x4E) | Creature | 3 | 29 | 3 | Moves 2 of 3 frames |
+| O-R (0x4F-0x52) | Creature | 2 | 10 | 1 | Slowest, weakest |
+| S-V (0x53-0x56) | Alien | 100 | 66 | 5 | Fastest, strongest |
 
-Initial facing direction encoded in the letter: first=left, second=right, third=up, fourth=down (e.g., G=left, H=right, I=up, J=down).
+Initial facing direction is encoded in the letter within each group of 4: first=right, second=left, third=up, fourth=down (e.g., G=right, H=left, I=up, J=down).
 
 ## Monster AI Decision Loop
 
 Runs in `monster_player_collision()` (seg_1000:5803), called every frame. For each active, alive monster:
 
-### Movement (every frame, throttled by speed)
+### Movement (every frame, throttled by speed divisor)
 ```
 if (frame_counter % speed_divisor != 0): move_player(monster)
 ```
-Speed 6 → moves 5 of every 6 frames. Speed 100 → moves 99 of every 100 frames.
 
 ### AI Decisions (every 26 frames)
 ```
@@ -94,17 +94,19 @@ Monster places a directional arrow bomb when:
 - It can "see" 5+ clear tiles in its current direction
 - No other monsters are in the blast line
 - Its own owner is not in the blast line
+- An enemy player shares its row or column but is not on the exact same tile
 
-Arrow direction matches movement: left→0xA5, right→0xA6, up→0xA8, down→0xA7.
+Arrow tile matches movement direction: right→0xA5, left→0xA6, down→0xA7, up→0xA8.
 
 ## Monster Activation
 
-Monsters start **dormant** (+0x103 == 0). They activate when:
+Monsters start **dormant** (+0x103 == 0). Activation checks run every 5 frames, with three detection methods:
 
 1. **Proximity**: player within 20 pixels (absolute) in both X and Y
 2. **Line-of-sight**: player on same row/column with no walls between them
+3. **Directional fan**: fan-shaped area ahead of the monster, up to 7 tiles wide
 
-Once active, a monster never goes dormant again.
+A roar sound plays on activation. Once active, a monster never goes dormant again.
 
 ## Pathfinding System
 
@@ -126,18 +128,8 @@ Three functions using **expanding square spiral search**:
 
 ## Collision & Damage
 
-- **Same-tile collision**: monster deals damage = `monster.health` to player's health
+- **Same-tile collision**: checked every frame with exact tile matching (not pixel proximity); monster deals damage = `monster.health` to player's health
 - **Owner immunity**: no damage if `monster.owner == player_number`
-- **Directional fan check**: for each direction, checks fan-shaped area up to 7 tiles wide
-
-## Player-Count Behavior
-
-| Players | Bot Slots | Mode |
-|---------|-----------|------|
-| 1 | Player 2 automated (mode=0) | Betting screen skipped |
-| 2 | None automated | Betting screen for player 2 (mode=1) |
-| 3 | Player 4 automated (mode=0) | Betting for player 2 |
-| 4 | None automated | Betting for player 2 and player 4 |
 
 ## Key Constants
 
@@ -149,6 +141,7 @@ Three functions using **expanding square spiral search**:
 | Monster AI tick | 26 frames | Decision frequency |
 | Random redirect | 33 / 121 frames | Direction change frequency |
 | Bomb placement threshold | 5 clear tiles | Min clear line for bomb |
+| Activation check | every 5 frames | Dormant monster detection tick |
 | Proximity activation | 20 pixels | Dormant → active distance |
 | Random move chance | 3% | Prevents deterministic loops |
-| Direction encoding | 1=left, 2=right, 3=up, 4=down | Entity movement |
+| Direction encoding | 1=right, 2=left, 3=up, 4=down | Entity movement |

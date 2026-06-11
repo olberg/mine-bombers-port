@@ -17,7 +17,7 @@
  *   S-V (0x53-0x56): speed 100 (moves 99 of every 100 frames)
  *
  * Within each group, the 4 letters encode initial facing direction:
- *   1st = down, 2nd = up, 3rd = left, 4th = right
+ *   1st = right, 2nd = left, 3rd = up, 4th = down
  */
 
 /* Monster type constants */

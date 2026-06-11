@@ -49,13 +49,15 @@ Named and key unnamed functions across all segments, grouped by module.
 ### AI
 | Line | Function | Purpose |
 |------|----------|---------|
-| — | `apply_bot_ai` | Bot AI entry point (params: mode, player_data ptrs) |
-| — | `move_entity_toward_target` | Pathfinding for bots/monsters |
+| — | `move_entity_toward_target` | Pathfinding for monsters |
+
+(`apply_bot_ai`, formerly listed here as the "bot AI entry point", is actually the shop screen in seg_1010 — see below. The decompiled name is a mislabel; the game has no bot players.)
 
 ### Scoring & Results
 | Line | Function | Purpose |
 |------|----------|---------|
-| ~6087 | (around FUN_1000_9778) | Multiplayer round-end scoring, PPM portraits |
+| 6459 | `FUN_1000_a17c` | Multiplayer round-end scoring (pool, shares, round wins, welfare floor) |
+| ~6087 | (around FUN_1000_9778) | Results screen with PPM portraits |
 | — | `player_select_screen` | Player setup / character select |
 
 ### Rendering (calls into seg_1010/1028)
@@ -120,9 +122,9 @@ Named and key unnamed functions across all segments, grouped by module.
 | Line | Function | Purpose |
 |------|----------|---------|
 | — | `init_music_playback` | Init music playback (SB/GUS/none) |
-| — | `enable_vga_display` | Enable VGA output |
+| — | `enable_vga_display` | **Mislabeled**: actually enables music (mode 0) — see [Music System](../audio/music-system.md) |
 | — | `setup_graphics_pages` | Configure VGA page flipping |
-| — | `swap_display_pages` | Flip display/draw pages |
+| — | `swap_display_pages` | **Mislabeled**: actually disables music (mode 0) — see [Music System](../audio/music-system.md) |
 | — | `set_palette` | Set VGA palette from buffer |
 | — | `palette_fade_in` | Gradual palette fade in |
 | — | `palette_fade_out` | Gradual palette fade out |
@@ -142,12 +144,13 @@ Named and key unnamed functions across all segments, grouped by module.
 | Line | Function | Purpose |
 |------|----------|---------|
 | 2940 | `FUN_1010_5860` | Init sound system, load VOC/S3M (SB path) |
-| 3110 | `FUN_1010_5c83` | Load GUS sound effects |
+| 3110 | `FUN_1010_5c83` | Load match audio at PLAY: OEKU.S3M + the 12 game VOCs |
 
 ### Game State
 | Line | Function | Purpose |
 |------|----------|---------|
 | 100 | `FUN_1010_02fc` | Load/validate saved game with checksums |
+| 6987 | `apply_bot_ai` | **Shop screen** — renders one page with up to two player purchase panels (first param: 1 = paired, 0 = solo). The decompiled name is a mislabel from an older analysis pass |
 | — | `FUN_1010_c5f4` | Game state update (called from round loop) |
 | — | `FUN_1010_c15c` | Pre-render game state update |
 | — | `FUN_1010_12c4` | Post-init game state setup |
@@ -175,7 +178,7 @@ Named and key unnamed functions across all segments, grouped by module.
 | Line | Function | Purpose |
 |------|----------|---------|
 | — | `init_timer` | Set up DOS timer interrupt |
-| — | `FUN_1018_0855` | Timer delay function |
+| 418 | `FUN_1018_0855` | Music: request jump to song order n at next pattern boundary (see [Music System](../audio/music-system.md)) |
 | — | `FUN_1018_2ede` | System tick handler |
 | — | `FUN_1018_33b3` | Read DOS environment variable |
 | — | `delay_wait` | Busy-wait delay |
@@ -256,11 +259,11 @@ entry() [1000]
   │   └→ FUN_1008_3574() [1008] — DMA init
   ├→ load_level() [1000]
   │   └→ rtl_* file ops [1030]
+  ├→ apply_bot_ai() [1010] — shop screen, before each round (mislabeled name)
   └→ game frame loop [1000]
       ├→ move_player() [1000]
       ├→ process_weapons() [1000]
       ├→ check_player_death() [1000]
-      ├→ apply_bot_ai() [1000]
       └→ redraw_game_screen() [1000]
           └→ sprite blit routines [1028]
 ```

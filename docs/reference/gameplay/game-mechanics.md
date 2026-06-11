@@ -7,7 +7,7 @@ Reverse-engineered from `seg_1000_game_logic.c` and cross-referenced with other 
 ### Dimensions
 - **45 columns (0x2D) x 64 rows (0x40)**
 - Each tile = 10x10 pixels
-- Map origin X offset: 30 pixels (0x1E)
+- On screen the 64-valued index runs horizontally (640 px) and the 45-valued index vertically (450 px); the playfield starts 30 pixels (0x1E) down, below the HUD strip (450 + 30 = 480)
 - Total tiles: 2,880
 
 ### Map Layers
@@ -109,7 +109,7 @@ Bounds check: if row >= 64 or col >= 45, returns 0x30 (empty floor).
 | 0x9D | — | 0xB6 | 280 | Mine (stages: → 0x9E → 0x9F → 0x9D) |
 | 'r' (0x72) | — | 0xDE | — | Rocket launcher (calls FUN_1010_4dff) |
 | 0xA1 | — | 0xCC | 90 | Timer bomb → urethane flood-fill on detonation |
-| 0xB0 | — | 0xE4 | — | **Money bomb** (+300 cash, no tile placed) |
+| 0xB0 | — | 0xE4 | — | **Super drill** ("SUPERpora", HISTORIA v3.1): +300 digging-power loan, no tile placed |
 | 0xA2 | — | 0xCE | — | Weapon variant |
 | 0xA4 | — | 0xC4 | — | Weapon variant |
 | 0xA5 | — | 0xBC | 1 | Directional arrow (immediate, direction-encoded) |
@@ -124,10 +124,10 @@ W → X → Y → Z → 0x7F → 0x80 → 0x81 → ... → 0xAB → W (loops)
 
 ### Directional Arrow Encoding
 Direction when placed determines tile value:
-- Down: 0xA5
-- Up: 0xA6
-- Left: 0xA8
-- Right: 0xA7
+- Right: 0xA5
+- Left: 0xA6
+- Down: 0xA7
+- Up: 0xA8
 
 ### Collision Values for Placed Items
 - Directional arrows (0xA5-0xA8): collision = **0** (passable)
@@ -178,17 +178,19 @@ See tile types table above. Range: 10 cash (0x95) to 1000 cash ('s').
 | 3 | 4/6 | 13 types | 3-13 |
 
 ### Kill Reward
-When a player kills another, the killer receives the dead player's accumulated round points.
+Killing another player increments the killer's kill counter (player struct +0x20/+0x22). There is no direct cash transfer to the killer — a dead player's round earnings go into the round-end pool shared by all survivors (see below). An earlier revision of this page claimed the killer receives the victim's points; that was a misread.
 
-### Money Bomb
-Costs 1 inventory slot, adds **+300 cash** instantly. 10-frame cooldown.
+### Super Drill ("Money Bomb", 0xB0)
+Despite the decompiled nickname, this grants no cash. It **loans +300 digging power**: a counter starts at 10 and ticks down on the 18-frame tick; when it reaches 1, the 300 digging power is deducted back. Using it consumes no ammo — the original's code path never reaches the inventory decrement.
 
-### Multiplayer Round-End Scoring
-1. Dead players' point totals pooled
-2. Pool distributed equally among survivors
-3. Remaining on-map treasures added to pool
-4. Survivors get kills counter incremented
-5. **Floor**: if player's total cash < 100, set to 150
+### Multiplayer Round-End Scoring (`FUN_1000_a17c`)
+1. Dead players forfeit this round's earnings into a pool (their banked wallet is untouched)
+2. If **exactly one** player survives, the pool also gets `Trunc(value of remaining on-map treasure / 2.5)`
+3. Every survivor receives `pool / survivors` plus their own round earnings into the wallet
+4. Survivors get a round win counted — but only when at least one player died this round
+5. **Welfare floor**: any wallet below 100 gets **+150 added** (not set to 150)
+
+Between rounds, banked savings earn **7% interest**: `wallet := Round(wallet * 1.07)` (`FUN_1010_ceb3`).
 
 ### Win Determination
 Configurable: by **most cash** or by **most individual round wins**.
@@ -207,14 +209,15 @@ digging-power fields.
 |--------|-----------|-----------|
 | Player movement | Every frame | Always |
 | Double-speed movement | Every frame | If player has speed bonus |
-| Weapons & death check | Every 2 frames | `frame_counter % 2 == 0` |
-| AI input processing | Every 5 frames | `frame_counter % 5 == 0` |
-| Monster-player collision (team 1) | Every 5 frames | `frame_counter % 5 == 0` |
-| Monster-player collision (team 2) | Every 5 frames, offset 3 | `frame_counter % 5 == 3` |
+| Input, weapons & death check | Every 2 frames | `frame_counter % 2 == 0` |
+| Monster contact damage | Every frame | Same-tile check, no modulo gate |
+| Monster activation + round-end checks | Every 5 frames | `frame_counter % 5 == 0` |
+| Super-drill loan counter | Every 18 frames | `frame_counter % 18 == 0` |
+| Treasures-gone check | Every 20 frames | `frame_counter % 20 == 0` |
 | Monster pathfinding | Every 26 frames | `frame_counter % 26 == 0` |
 | Monster random direction | Every 33 or 121 frames | `frame_counter % 33 == 0` or `% 121 == 0` |
 | Overlay/fuse timers | Every frame | All overlays > 1 decremented |
-| Time bar + treasure check | Every 20 frames | `frame_counter % 20 == 0` |
+| Time limit countdown | 18.2065 Hz PIT ticks | Wall-clock INT8 ISR, not frame-locked |
 
 ### Frame Delay
 - `g_frame_delay` controls `delay_wait()` per frame
@@ -230,11 +233,13 @@ digging-power fields.
 
 ### Multiplayer Round End
 Any of:
-1. **< 2 players alive** → inactivity counter starts (3 per 5 frames), round ends at 100
-2. **All treasures collected** → inactivity counter increments by 20 per 20 frames (fast)
-3. **Time runs out** → `g_round_over = 1`
-4. **ESC key** → exits all remaining rounds
-5. **Sync key** in multiplayer → immediate round end
+1. **< 2 players alive** → inactivity counter ramps (+3 per 5-frame check), round ends when it exceeds 100
+2. **All treasures collected** → inactivity ramps fast (+20 per 20-frame check)
+3. **Time runs out** → round ends (multiplayer only; in single-player the timer resets to full instead)
+4. **ESC** → ends the current round (multiplayer only; does nothing in single-player)
+5. **F10** → aborts the whole match, both modes
+
+The decompiler's variable names had ESC and the abort key swapped ("g_key_mp_sync" is actually ESC); there is no separate "sync key". Other in-round keys: P pauses (any key resumes), F5 toggles music.
 
 ### Collision Detection
 - **Proximity**: absolute distance < 20 pixels in both X and Y

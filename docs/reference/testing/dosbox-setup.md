@@ -8,7 +8,7 @@ Use **DOSBox-X** (not stock DOSBox). DOSBox-X has better VGA accuracy, a built-i
 
 - Windows: download the latest release from <https://dosbox-x.com>. Extract anywhere; the binary is `dosbox-x.exe`.
 
-Stock DOSBox 0.74-3 also works for screenshots, but some VGA Mode X edge cases render differently. Prefer DOSBox-X.
+Stock DOSBox 0.74-3 also works for screenshots, but some VGA edge cases render differently. Prefer DOSBox-X.
 
 ## Launching the original
 
@@ -21,7 +21,7 @@ dosbox-x.exe -conf docs/reference/testing/minebombers.dosbox.conf original/MB.EX
 The config file is committed alongside this doc and pins:
 
 - CPU: `core=auto`, `cycles=fixed 50000` (approximates a 486DX2/66, matches original target)
-- Machine: `machine=svga_s3` (VGA Mode X supported)
+- Machine: `machine=svga_s3` (full VGA Mode 12h support)
 - Scaler: `scaler=none` (no smoothing — we want raw VGA output)
 - Sound Blaster: `sbtype=sb16`, `oplmode=opl3` (matches original's `AT OPL3` mode)
 - Output: `output=openglpp` (pixel-perfect scaling)

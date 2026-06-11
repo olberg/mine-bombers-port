@@ -60,7 +60,7 @@ set_palette()
 if single_player (num_players == 1):
     load_level(level_filename)   — Load .MNL campaign level
     FUN_1000_a4af()              — Single-player level init
-elif multiplayer with preset maps (score < 30000 and mode_flag == 0):
+elif multiplayer with a picked map (this round's map-picker slot < 30000; 32000 = "Random" cell):
     load_level(map_filename)     — Load .MNE map file
 else:
     FUN_1008_1263()              — Generate random level
@@ -69,11 +69,13 @@ clear_palette_to_black()
 game_state_update()
 enable_vga_display()
 
-— Apply bot AI for empty player slots
-if num_players == 1: apply_bot_ai(player2 as bot)
-if num_players == 2: apply_bot_ai(player2 as bot)
-if num_players == 3: apply_bot_ai(player2, player4 as bots)
-if num_players == 4: apply_bot_ai(player2, player4 as bots)
+— Shop screens. The decompiled name "apply_bot_ai" is a mislabel (an older
+— analysis pass misread it — there are no bots): the function renders one
+— shop page with up to two player purchase panels. Param 1 = paired, 0 = solo.
+if num_players == 1: shop page (P1 solo)
+if num_players == 2: shop page (P1 + P2)
+if num_players == 3: shop page (P1 + P2), then shop page (P3 solo)
+if num_players == 4: shop page (P1 + P2), then shop page (P3 + P4)
 
 swap_display_pages()
 redraw_game_screen()
@@ -90,14 +92,17 @@ g_rounds_remaining -= 1
 ## Frame Loop (per frame)
 
 ```
-— Check special keys
-if g_key_mp_sync && num_players > 1:
+— Check special keys. The decompiled key names are misleading — re-derived
+— from MB.EXE bytes: "g_key_mp_sync" is ESC, "g_key_esc" is F10, and
+— "g_key_screen_toggle" is F5, which toggles MUSIC (the "swap_display_pages"
+— call it gates is actually disable_music).
+if ESC && num_players > 1:              — ends the current round
     palette_fade_out()
     g_round_over = 1
 
-if g_key_pause: FUN_1000_7194()         — Pause handler
-if g_key_screen_toggle: swap display    — Toggle display page
-if g_key_esc:
+if P: FUN_1000_7194()                   — Pause handler
+if F5: toggle music
+if F10:                                  — aborts the whole match
     palette_fade_out()
     g_rounds_remaining = 0
     g_round_over = 1
@@ -132,7 +137,7 @@ if minimap_enabled: draw minimap
 | **Main Menu** | After title, after match ends | Menu selection or F10 quit |
 | **Options Menu** | Selected from main menu | "Mainmenu" option → Main Menu |
 | **Player Select** | Before match starts | All players selected → Shop/Round |
-| **Shop** | Before each multiplayer round | All players press Leave/ESC → Round |
+| **Shop** | Before each round, both modes (the single-player campaign starts in the shop too) | All players press Leave/ESC → Round |
 | **Round (Gameplay)** | After shop / level load | Time runs out, <2 alive, all treasures collected, ESC |
 | **Round Results** | After round ends | Auto-advance to next round/shop |
 | **Match Results** | All rounds complete | Any key → Main Menu |
@@ -147,7 +152,7 @@ if minimap_enabled: draw minimap
 - Goal: find the exit door (black square with grey borders)
 - On death: lose 1 life, retry same level (g_rounds_remaining incremented)
 - On 0 lives: game over → Hall of Fame check
-- Bot AI controls player 2 as opponent
+- Opposition comes from map-spawned monsters — there is no bot player (the "bot AI" in older revisions of this page was a misread of the shop function)
 
 ## Multiplayer Mode
 
@@ -156,7 +161,7 @@ if minimap_enabled: draw minimap
 - Each round: shop → gameplay → scoring
 - Round ends when: time expires, <2 players alive, all treasures collected
 - Winner determined by: most cash OR most individual round wins (configurable)
-- Bot AI fills empty player slots
+- All player slots are human-controlled — there are no AI-controlled player slots
 
 ## Sound System Initialization
 

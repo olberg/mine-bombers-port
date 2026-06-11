@@ -14,10 +14,10 @@ bitplanes and an 80-byte row stride. Confirmed by the BGI driver string
 - **Read plane**: port 0x3CE (Graphics Controller Index) = 4, port 0x3CF = plane (0-3)
 - **All planes**: port 0x3C5 = 0x0F
 
-### Page Flipping
-- `set_draw_page(param_1, param_2)` — sets current draw target (up to 12 pages, stored in `DAT_1038_7FFE/8000`)
-- `swap_display_pages()` (seg_1010:3295) — swaps visible/draw pages
-- Display page set via CRTC Start Address registers (0x3D4/0x3D5, registers 0x0C/0x0D)
+### Draw Pages
+- `set_draw_page(param_1, param_2)` — sets the current draw target (stored in `DAT_1038_7FFE/8000`)
+- `swap_display_pages()` (seg_1010:3295) is **not** a page flip despite its decompiled name — it disables music (see [Music System](../audio/music-system.md)); its counterpart `enable_vga_display` enables music
+- Display start address is set via CRTC Start Address registers (0x3D4/0x3D5, registers 0x0C/0x0D), but during gameplay the CRTC start is only ever touched by screen shake — the game draws directly to the visible page rather than double-buffering
 
 ### Vertical Retrace Sync
 ```
@@ -79,8 +79,7 @@ Per frame:
 3. **HUD panels** — `draw_player_status_panels()` draws weapon/stat panels
 4. **HUD text** — `draw_game_hud()` draws text overlays (weapon names, cash, etc.)
 5. **Minimap** (if enabled) — `g_minimap_enabled` controls visibility
-6. **Page flip** — `swap_display_pages()`
-7. **Screen shake** — CRTC start address offset
+6. **Screen shake** — CRTC start address offset (the only CRTC write during gameplay; there is no per-frame page flip)
 
 ## Palette System
 

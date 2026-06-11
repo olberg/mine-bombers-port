@@ -36,7 +36,14 @@ Read/written by `FUN_1000_3276` (seg_1000:2096). Individual records accessed by 
 - Record size = 0x65 (101 bytes)
 - New file: each record initialized with first byte = 1, rest = 0
 
-Per-record layout is not fully decoded. The first byte appears to be a "player exists" flag.
+Per-record layout (decoded from `FUN_1000_19e8`, seg_1000:1053, and `FUN_1000_15c7`, seg_1000:867):
+
+| Offset | Size | Field | Notes |
+|--------|------|-------|-------|
+| 0x00 | 1 | exists flag | **0 = record exists**, nonzero (1) = empty slot. Verified against the shipped `PLAYERS.DAT`: "Plr 1"/"Plr 2" have 0x00, the 30 empty slots 0x01. |
+| 0x01 | 25 | name | Pascal String[24]: length byte + up to 24 chars |
+| 0x1A | 40 | stats | 10 x uint32 cumulative career counters, merged once per multiplayer match: matches played, matches won, rounds played, round wins, treasures collected, money earned, (unidentified), weapons placed, deaths, tiles walked |
+| 0x42 | 35 | weapons | weapon inventory bar data |
 
 ## Player Slot Selections (4 bytes)
 
@@ -52,7 +59,7 @@ Read by `FUN_1000_2e4e` (seg_1000:1863), written by `FUN_1000_2f9f` (seg_1000:19
 ## High Score Table (260 bytes)
 
 Read by `FUN_1000_a619` (seg_1000:6713), written by `FUN_1000_a6d7` (seg_1000:6748).
-Filename at address `0xa60c` in seg_1030 (likely `halloffa.dat`).
+Filename: `HALLOFFA.DAT` (string at address `0xa60c` in seg_1030).
 
 10 entries x 26 bytes each = 260 bytes (0x104).
 
@@ -83,8 +90,8 @@ Read by `FUN_1000_6e4c` (seg_1000:4315). Sound hardware parameters (usage is in 
 | Offset | Size | Field | Default | Notes |
 |--------|------|-------|---------|-------|
 | 0x00 | 1 | Sound card type | 10 | 0=GUS, 1=SB, 2=SBPro, 3=SB16, 4=none, 10=no sound |
-| 0x01 | 1 | IRQ number | 1 | Sound Blaster IRQ |
-| 0x02 | 1 | DMA channel | 7 | |
+| 0x01 | 1 | DMA channel | 1 | An earlier revision labeled bytes 1-2 as IRQ then DMA; the defaults (1 and 7) match the Sound Blaster convention DMA=1, IRQ=7 |
+| 0x02 | 1 | IRQ number | 7 | Sound Blaster IRQ |
 | 0x03 | 1 | Base port multiplier | 2 | Port = value * 0x10 + 0x200 (2 → 0x220) |
 | 0x04 | 1 | Sound features | 1 | Bitmask: bit 0 = music, bit 1 = SFX |
 | 0x05 | 1 | Mixing rate multiplier | 22 | Rate = value * 1000 (22 → 22000 Hz) |
@@ -110,13 +117,14 @@ Read by `FUN_1010_9fbb` (seg_1010:5641), written by `FUN_1010_c1c5` (seg_1010:71
 
 Text file with 32 integer values (Pascal `read`/`write` format). 8 values per player x 4 players.
 
-Per-player fields (order): Up, Down, Left, Right, Stop, Bomb/Buy, Choose/Sell, extra.
+Per-player field order in the file (from the read sequence in `FUN_1010_9fbb`): **Up, Down, Left, Right, Bomb, Remote, Choose/Sell, Stop**. (In the player struct the same keys sit at offsets 0xF3-0xFA in a different order: Left, Right, Up, Down, Stop, Bomb, Remote, Choose/Sell.)
 
-**Default scancodes:**
-- Player 1: 0x48(Up), 0x50(Down), 0x4B(Left), 0x4D(Right), 0xB5(Stop), 0x4F(Bomb), 0xAD(Choose), 0x4C(Sell) — arrow keys + numpad
-- Player 2: 0x11(W), 0x2D(X), 0x1E(A), 0x20(D), 0x0F(Tab), 0x2C(Z), 0x29(`` ` ``), 0x1F(S)
-- Player 3: 0x18(O), 0x34(.), 0x25(K), 0x27(;), 0x17(I), 0x33(,), 0x09(8), 0x26(L)
-- Player 4: 0xAC, 0xB4, 0xAF, 0xB1, 0x81, 0x9C, 0x36, 0x29 — extended scancodes
+**Default scancodes** (key identities resolved against MB.EXE's own scancode-name table; an earlier revision of this page misassigned the action labels):
+
+- Player 1 (numpad + nav cluster): 0x48 NP-Up, 0x50 NP-Down, 0x4B NP-Left, 0x4D NP-Right, 0xB5 PageDown (Bomb), 0x4F NP-1/End (Remote), 0xAD PageUp (Choose/Sell), 0x4C NP-5 (Stop)
+- Player 2 (WASD area): 0x11 W, 0x2D X, 0x1E A, 0x20 D, 0x0F Tab (Bomb), 0x2C Z (Remote), 0x29 key left of '1' (Choose/Sell), 0x1F S (Stop)
+- Player 3 (OKL area): 0x18 O, 0x34 period, 0x25 K, 0x27 semicolon, 0x17 I (Bomb), 0x33 comma (Remote), 0x09 8 (Choose/Sell), 0x26 L (Stop)
+- Player 4 (arrow keys + right-hand modifiers, extended scancodes): 0xAC Up, 0xB4 Down, 0xAF Left, 0xB1 Right, 0x81 RCtrl (Bomb), 0x9C RAlt (Remote), 0x36 RShift (Choose/Sell), 0x29 (Stop — the original ships this conflict with Player 2's Choose key)
 
 ## Level Maps — `.MNL` / `.MNE` (text format)
 
@@ -135,19 +143,19 @@ Note: The original `.MNE` and `.MNL` files on disk are 2,970 bytes. The text enc
 Read by `load_and_display_image` (seg_1010:4280).
 
 ```
-Offset 0x000:  768 bytes (0x300) — VGA palette (256 x RGB, 6-bit per channel)
+Offset 0x000:  768 bytes (0x300) — palette (256 x RGB, 8-bit per channel)
 Offset 0x300:  Variable — RLE-compressed pixel data (4 planes)
 ```
 
-**Palette:** 256 entries, 3 bytes each (R, G, B). VGA 6-bit values (0-63). Loaded to `DAT_1038_0688`.
+**Palette:** 256 entries, 3 bytes each (R, G, B). Values are already 8-bit (0-255), not 6-bit VGA DAC — see [SPY Format Analysis](spy-format-analysis.md). Loaded to `DAT_1038_0688`.
 
 **RLE compression** (decoded by `FUN_1010_7114`, seg_1010:4237):
 - Byte `0x01`: RLE marker. Next byte = fill value, next byte = run length.
-- Any other byte: literal pixel, copy as-is.
-- Decompressed output per plane: 38,400 bytes (0x9600)
-- 4 VGA Mode X planes, decompressed sequentially
+- Any other byte: literal byte, copy as-is.
+- Decompressed output per plane: 38,400 bytes (0x9600) = 80 bytes/row x 480 rows
+- 4 planes, decompressed sequentially
 
-Total uncompressed pixel data: 4 x 38,400 = 153,600 bytes (320 x 480 pixels, or 320x240 with 4 planes).
+The planes are **1-bit-per-pixel bitplanes** of a 640x480 image (640 pixels / 8 = 80 bytes per row). The four planes combine to a 4-bit color index per pixel, so SPY images use 16 colors — only the first 16 palette entries matter. Total decompressed data: 4 x 38,400 = 153,600 bytes.
 
 ## PCX Image Format
 
