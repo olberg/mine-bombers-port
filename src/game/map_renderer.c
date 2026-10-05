@@ -1,18 +1,22 @@
 #include "game/map_renderer.h"
+#include "game/map_edges.h"
 #include "game/sprites.h"
 #include "raylib.h"
 #include <stddef.h>
 
 static const TileMap *current_map = NULL;
+static EdgeState edges;
 
 void map_renderer_init(void)
 {
     current_map = NULL;
+    map_edges_reset(&edges);
 }
 
 void map_renderer_set_map(const TileMap *map)
 {
     current_map = map;
+    map_edges_reset(&edges);
 }
 
 /* Fog of war: with darkness on, only revealed tiles (layer4 bit 0 clear) are
@@ -38,6 +42,8 @@ void map_renderer_draw(int y_offset)
 {
     if (!current_map) return;
 
+    map_edges_update(&edges, current_map);
+
     for (int row = 0; row < MAP_ROWS; row++) {
         for (int col = 0; col < MAP_COLS; col++) {
             int px = row * TILE_SIZE;
@@ -45,11 +51,19 @@ void map_renderer_draw(int y_offset)
 
             if (map_renderer_tile_hidden(current_map, row, col)) {
                 DrawRectangle(px, py, TILE_SIZE, TILE_SIZE, BLACK);
-                continue;
+            } else {
+                sprites_draw_tile(current_map->tiles[row][col], px, py);
             }
 
-            uint8_t tile = current_map->tiles[row][col];
-            sprites_draw_tile(tile, px, py);
+            /* Edge strips are painted over the tile, hidden or not: the
+             * original draws them into the screen buffer regardless. */
+            uint8_t layers[EDGE_MAX_LAYERS];
+            int n = map_edges_tile_layers(&edges, row, col, layers);
+            for (int i = 0; i < n; i++) {
+                const EdgeSpriteInfo *e = map_edges_sprite_info(layers[i]);
+                sprites_draw_region(e->src_x, e->src_y, e->w, e->h,
+                                    px + e->dx, py + e->dy);
+            }
         }
     }
 }

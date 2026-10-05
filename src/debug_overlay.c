@@ -199,7 +199,7 @@ void debug_draw(const Player players[], int num_players)
         int entity_count = 0;
         Entity *e = g_round->entity_head;
         while (e) {
-            if (!e->dead) entity_count++;
+            if (!e->body.dead) entity_count++;
             e = e->next;
         }
         snprintf(buf, sizeof(buf), "Entities: %d", entity_count);

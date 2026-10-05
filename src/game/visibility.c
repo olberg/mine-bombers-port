@@ -53,87 +53,70 @@ void visibility_reveal_tile(TileMap *map, int row, int col)
     map->layer4[row][col] &= ~VIS_HIDDEN_BIT;
 }
 
+/* Bitmap of the set at seg_1000:4A31 (32 bytes, bit n of byte n/8): the
+ * tiles a vision ray passes through (FUN_1000_4a51, seg_1000:3131).
+ * Floor and most things lying on it are in it; sand, stone, walls,
+ * monsters and fire are not. */
+static const uint8_t SEE_THROUGH_SET[32] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x80, 0x03, 0xf8, 0x0f, 0x88, 0xf1,
+    0x0f, 0xfc, 0xff, 0xf7, 0xef, 0x8f, 0x30, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
 bool visibility_tile_blocks_los(uint8_t tile)
 {
-    /* Passable tiles don't block LOS.
-     * From decompiled FUN_1000_4a51 (seg_1000:3131):
-     * the ray checks a visibility-blocking table — tiles that are
-     * passable ('0', 'f', 0xAF) and most pickups/items don't block.
-     * Walls ('1', '5'-'9', 'A'-'F', 'p', 'q', 0xAC-0xAE, 'l') block. */
-    switch (tile) {
-    case '0': case 'f': case 0xAF:  /* floor, decorative floor */
-        return false;
-    case '2': case '3': case '4':  /* floor variants */
-        return false;
-    case '5': case '6':  /* damaged walls (partially see-through) — still block */
-        return true;
-    case 'k':  /* exit tile */
-        return false;
-    default:
-        break;
-    }
+    return !((SEE_THROUGH_SET[tile >> 3] >> (tile & 7)) & 1);
+}
 
-    /* Walls block */
-    if (tile == '1') return true;  /* indestructible */
-    if (tile >= '7' && tile <= '9') return true;
-    if (tile >= 'A' && tile <= 'F') return true;
-    if (tile == 'p' || tile == 'q') return true;
-    if (tile == 'l') return true;  /* gate */
-    if (tile >= 0xAC && tile <= 0xAE) return true;  /* reinforced */
-    if (tile == 'B') return true;
-
-    /* Items, bombs, treasures, pickups, effects: don't block */
-    return false;
+static int sign_of(int v)
+{
+    return (v > 0) - (v < 0);
 }
 
 /*
- * Cast a single visibility ray from (src_col, src_row) toward (dst_col, dst_row).
- * Uses Bresenham line algorithm. Reveals each tile along the way.
- * Stops when hitting a wall that blocks LOS.
+ * Cast one vision ray from tile (row, col) toward (dst_row, dst_col),
+ * revealing each tile on the way, the one that stops it included.
  *
- * Decompiled ref: FUN_1000_4a51 (seg_1000:3082-3152).
+ * FUN_1000_4a51 (seg_1000:3082-3152) walks the line with a numerator
+ * that starts at half the longer side: each step is either diagonal or
+ * along the longer axis. The original does it in Pascal reals; every
+ * value is a whole number, so integers give the same path.
  */
-static void cast_visibility_ray(TileMap *map, int src_col, int src_row,
-                                 int dst_col, int dst_row)
+static void cast_visibility_ray(TileMap *map, int row, int col,
+                                int dst_row, int dst_col)
 {
-    int dx = abs(dst_col - src_col);
-    int dy = abs(dst_row - src_row);
-    int sx = (src_col < dst_col) ? 1 : -1;
-    int sy = (src_row < dst_row) ? 1 : -1;
-    int err = dx - dy;
+    int d_row = dst_row - row;
+    int d_col = dst_col - col;
+    int diag_row = sign_of(d_row), diag_col = sign_of(d_col);
+    int axis_row = sign_of(d_row), axis_col = 0;
+    int longest = abs(d_row);
+    int shortest = abs(d_col);
+    if (!(longest > shortest)) {
+        axis_row = 0;
+        axis_col = sign_of(d_col);
+        longest = abs(d_col);
+        shortest = abs(d_row);
+    }
+    int numerator = longest / 2;
 
-    int col = src_col;
-    int row = src_row;
-
-    /* Maximum number of steps to prevent infinite loops */
-    int max_steps = dx + dy + 1;
-
-    for (int step = 0; step < max_steps; step++) {
-        /* Bounds check */
+    for (int i = 0; i <= longest; i++) {
+        /* The original has no bounds test: the wall ring stops every ray. */
         if (row < 0 || row >= MAP_ROWS || col < 0 || col >= MAP_COLS)
             break;
 
-        /* Reveal this tile */
         visibility_reveal_tile(map, row, col);
-
-        /* Check if this tile blocks further visibility */
-        uint8_t tile = map->tiles[row][col];
-        if (visibility_tile_blocks_los(tile))
+        if (visibility_tile_blocks_los(map->tiles[row][col]))
             break;
 
-        /* Reached destination */
-        if (col == dst_col && row == dst_row)
-            break;
-
-        /* Bresenham step */
-        int e2 = 2 * err;
-        if (e2 > -dy) {
-            err -= dy;
-            col += sx;
-        }
-        if (e2 < dx) {
-            err += dx;
-            row += sy;
+        numerator += shortest;
+        if (!(numerator < longest)) {
+            numerator -= longest;
+            row += diag_row;
+            col += diag_col;
+        } else {
+            row += axis_row;
+            col += axis_col;
         }
     }
 }
@@ -198,7 +181,9 @@ void visibility_reveal_player(TileMap *map, const Player *p)
         return;
     }
 
-    /* Clamp starting positions */
+    /* Only the start of the sweep is clamped, and only at zero
+     * (seg_1000:3220-3228); targets past the far edges stay where they
+     * are, which keeps the fan's angle. */
     if (sweep_start_row < 0) sweep_start_row = 0;
     if (sweep_start_col < 0) sweep_start_col = 0;
 
@@ -208,15 +193,7 @@ void visibility_reveal_player(TileMap *map, const Player *p)
     int ray_col = sweep_start_col;
 
     for (int i = 0; i < 40; i++) {
-        /* Clamp ray target to map bounds */
-        int tr = ray_row;
-        int tc = ray_col;
-        if (tr < 0) tr = 0;
-        if (tr >= MAP_ROWS) tr = MAP_ROWS - 1;
-        if (tc < 0) tc = 0;
-        if (tc >= MAP_COLS) tc = MAP_COLS - 1;
-
-        cast_visibility_ray(map, player_col, player_row, tc, tr);
+        cast_visibility_ray(map, player_row, player_col, ray_row, ray_col);
 
         /* Advance ray target along the sweep */
         ray_row += cone_dr;

@@ -68,6 +68,8 @@ offset 4: pixel data (width * height bytes, planar)
 
 Viewport defined by: `DAT_1038_7fee` (X offset), `DAT_1038_7ff0` (Y offset), `DAT_1038_7f5e` (right edge), `DAT_1038_7f60` (bottom edge).
 
+Mode 0 is a plain copy (BGI COPY_PUT): every pixel of the sprite is written, colour index 0 included. Player and monster cells are blitted this way as whole 10x10 squares (seg_1000:3782-3842, 3889), so their black pixels cover what is underneath. The terrain edge strips below rely on the same.
+
 ### Screen Capture
 `capture_screen_region(dest, x2, y2, x1, y1)` (seg_1028:2110) — copies VRAM rectangle to memory buffer. First 2 words of dest = width, height.
 
@@ -95,11 +97,58 @@ darkness on:
   already revealed (seg_1010:670-672, 717-719).
 - Monsters do not get their `move_player` pass before the round's fade-in
   (seg_1000:7132-7134).
+- A player's vision fan is cast when the player crosses a tile centre toward
+  a passable tile (head of `FUN_1000_5073`, seg_1000:3351-3362). That is
+  gated on the mover's match-stats pointer (+0xFF), which is null for
+  monsters, so a monster never lights up the dark.
+- Each ray of the fan (`FUN_1000_4a51`, seg_1000:3082-3152) reveals every
+  tile on its way, the one that stops it included. A ray passes through the
+  tiles in the set constant at seg_1000:4A31: floor and most things lying on
+  it, such as bombs and treasure. Sand, stone, walls, monster tiles
+  ('G'-'V') and fire stop it.
+- The ray walks its line with a numerator that starts at half the longer
+  side, each step going either diagonally or along the longer axis. Ray
+  targets past the far map edges are not pulled back onto the map (only the
+  start of the sweep is clamped, at zero; seg_1000:3220-3228), so the fan
+  keeps its angle next to an edge.
 
 The one-pixel-per-tile picture of the map is drawn in two places only: the
 shop's NEXT LEVEL panel (`FUN_1010_b227` at (0x120, 0x33), and only when
 darkness is off, seg_1010:6540) and the map picker's preview box
 (`FUN_1010_db96` at (0x14a, 7)).
+
+## Terrain Edge Strips
+
+Every tile is drawn with one fixed sprite. On top of that the game paints
+thin edge strips onto sand and stone tiles where they border open ground:
+4x10 pieces on a tile's left and right sides, 10x3 pieces on its top and
+bottom (right strips sit 6 px into the tile, bottom strips 7 px). There are
+16 of them in four groups of left/right/top/bottom, captured from SIKA.SPY
+at seg_1010:4812-4890:
+
+| Group | Sprites | Sheet position (left strip) | Painted on |
+|-------|---------|-----------------------------|------------|
+| Lit sand | `DAT_1038_0454`-`0460` | (194, 117) | '2'-'6' |
+| Lit rock | `DAT_1038_0464`-`0470` | (205, 117) | '7'-'9', 'A', 'C'-'F' |
+| Plain sand | `DAT_1038_0474`-`0480` | (194, 98) | '2'-'6' on every side; '7'-'9' and 'A' on two sides each, the ones that are not their solid corner |
+| Plain rock | `DAT_1038_0484`-`0490` | (148, 60) | 'C'-'F' |
+
+The strips live in the screen buffer, so what is visible depends on what
+has been drawn since the tile itself was last redrawn:
+
+- `redraw_game_screen` (seg_1000:2906) paints plain strips around every
+  open tile when the level is first drawn, unless darkness is on. "Open" is
+  the set constant at seg_1000:471A, tested at seg_1000:2948.
+- Digging a wall away calls `draw_map_edges` (seg_1000:2823) for the dug
+  tile (seg_1000:3718), which paints plain strips on its four neighbours.
+- A fire tile spawned by an explosion calls `FUN_1010_0caa` (seg_1010:541),
+  which paints the lit variants on its neighbours.
+- Redrawing a tile (`mark_tile_for_redraw`, seg_1010:5258) wipes the strips
+  that were on it.
+
+The port has no persistent screen buffer. `src/game/map_edges.c` keeps the
+strips currently painted on each tile, in paint order, and derives the
+events above by comparing the map with the previous frame.
 
 ## Palette System
 
@@ -197,7 +246,7 @@ Captured as arbitrary rectangles from the sprite sheet (SIKA.SPY):
 - `DAT_1038_0678` — menu cursor (shovel), 65x20 pixels at (150, 140). Drawn at X=222, Y=136/184/232/280
 - `g_spr_life_full` / `g_spr_life_empty` — life bar indicators (~20x11 pixels)
 - Status panel sprites — ~30x90 pixel regions
-- Wall edge overlays — 4x4, 4x10, 10x4 pixel pieces
+- Terrain edge strips — 4x10 and 10x3 pixel pieces (see [Terrain Edge Strips](#terrain-edge-strips))
 
 ## Image Format Support
 

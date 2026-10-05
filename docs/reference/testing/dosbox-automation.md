@@ -1,122 +1,125 @@
-# DOSBox-X automation recipe
+# dosbox-automation recipe
 
-**Verdict: feasible.** The original game can be launched, driven by scripted
-keystrokes, captured (lossless video + PCM audio), and shut down with **zero
-manual input**. Verified 2026-06-10 on Windows 10 with DOSBox-X 2026.03.29
-mingw64.
+The original game can be launched, driven by injected keys, photographed at
+native resolution and shut down with **zero manual input**, over the REST API
+of dosbox-automation. Verified 2026-10-05 on Windows 10 with dosbox-automation
+0.85.1 and PowerShell 5.1. Install and config are in
+[DOSBox setup](dosbox-setup.md).
 
-Key feasibility results:
+The loop is closed: send keys, read the frame, decide the next step.
 
-| Question | Answer |
-|---|---|
-| Does AUTOTYPE input reach MB.EXE's own INT 9 keyboard ISR? | **Yes** — injection is at the emulated-keyboard level, below the BIOS buffer. Injected ESC/Enter/F10 navigated title → menu → player select → shop → rounds. |
-| Can DOSBox-X start and exit unattended? | Yes — `shutdown /s` in `[autoexec]` + `quit warning=false` + `startbanner=false` + `-fastlaunch`. A pure-DOS smoke run completes in ~2 s. |
-| Video/audio capture without hotkeys? | Yes — `dx-capture MB.EXE` records AVI (ZMBV lossless, 640×480) with PCM s16le audio for the program's whole lifetime. |
-| Screenshots? | Extract frames from the AVI with ffmpeg (`-vf fps=...`). No in-shell screenshot command exists; the Ctrl+F5 hotkey is not scriptable. |
+## Starting a run
 
-## Setup
-
-1. Download a DOSBox-X Windows **mingw64 portable** release and unzip under
-   `tools/dosbox-x/` (gitignored). The exe lands at
-   `tools/dosbox-x/<ver>/mingw-build/mingw/dosbox-x.exe`.
-2. **TRAP — do not use an `-osfree` release.** Releases tagged `…-osfree`
-   (which can be the *latest* release on GitHub) are built from the
-   `main-osfree` branch with the built-in DOS **removed**: no `mount`, no
-   `shutdown`, autoexec commands fail with `Bad command or filename` and the
-   machine ends at "Operating System Not Found". Use a plain release
-   (e.g. `dosbox-x-v2026.03.29`, asset `dosbox-x-mingw64-2026.03.29-portable.zip`).
-3. Copy `original/` to a scratch dir (e.g. `build/dosbox-spike/game/`) and
-   mount **that** — the game writes .DAT files next to MB.EXE.
-
-## Working config template
-
-```ini
-[sdl]
-autolock=false
-quit warning=false
-
-[dosbox]
-captures=<project>\build\dosbox-spike\capture
-memsize=16
-startbanner=false
-fastbioslogo=true
-
-[cpu]
-core=dynamic
-cycles=max
-
-[autoexec]
-mount c "<project>\build\dosbox-spike\game"
-c:
-autotype -w 15 -p 2.0 esc enter esc esc esc esc enter f10 enter
-dx-capture MB.EXE
-echo GAME-EXITED-OK > MARKER.LOG
-shutdown /s
-```
-
-Launch (PowerShell — note the timeout/kill guard; a key-script that strands
-the game on a key-wait screen hangs the run):
+From the project root, with the game copied to `build\dosbox\game` (see the
+setup page):
 
 ```powershell
-$exe = 'tools\dosbox-x\v2026.03.29\mingw-build\mingw\dosbox-x.exe'
-$p = Start-Process $exe -WorkingDirectory (Split-Path $exe) `
-     -ArgumentList '-conf','<conf>','-fastlaunch','-nogui' -PassThru
-if (-not $p.WaitForExit(120000)) { $p.Kill() }
+$dosbox = 'tools\dosbox-automation\dosbox-automation-0.85.1\dosbox.exe'
+
+# Every API request has to carry this token.
+$bytes = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$env:DOSBOX_API_TOKEN = -join ($bytes | ForEach-Object { $_.ToString('x2') })
+
+$p = Start-Process $dosbox -PassThru -ArgumentList '--noprimaryconf','--nolocalconf','--conf','docs\reference\testing\minebombers.dosbox.conf'
+
+$api = 'http://127.0.0.1:8386/api/v1'
+$h = @{ Authorization = "Bearer $env:DOSBOX_API_TOKEN" }
+
+# Wait for the API. It answers within a second.
+foreach ($i in 1..60) {
+    try { Invoke-RestMethod "$api/status" -Headers $h -TimeoutSec 2 | Out-Null; break }
+    catch { Start-Sleep -Milliseconds 500 }
+}
 ```
 
-Success detection: the `echo … > MARKER.LOG` line after the game command
-only runs if the game exited, so the marker file = "key script drove the
-game back to DOS".
+The emulator takes the token from `DOSBOX_API_TOKEN` at startup. If the
+variable is not set it makes up a token of its own and logs only the first
+characters: the game runs, but every request is answered with 401.
 
-## AUTOTYPE notes
+The title screen is up about two seconds after the API answers.
 
-- Syntax: `autotype [-w initial_wait_s] [-p pace_s] key1 key2 …`. Key names:
-  `esc`, `enter`, `f10`, letters/digits as-is. It queues keystrokes
-  asynchronously; put it **before** the game command.
-- It is **fire-and-forget with a fixed pace** — no conditional waits, no
-  state detection. Screens that wait for a key (title, match-winner/results
-  screen) consume one keystroke each; palette fades (7 steps) and level
-  loads delay state changes, so use a generous pace (≥ 2 s) and expect to
-  iterate against captured video.
-- Observed traversal with the template above (2 defaults players): title →
-  main menu → PLAY → player select → **shop** → round ↔ shop loop via ESC →
-  match end → **winner screen (waits for a key — budget keystrokes for
-  it)** → main menu → F10 quits.
-- MB.EXE hooks INT 9 directly; AUTOTYPE still works (it injects scancodes
-  at the emulated keyboard controller, not the BIOS buffer).
+## Calls
 
-## Capture and analysis
+All paths are under `http://127.0.0.1:8386/api/v1`.
 
-- `dx-capture MB.EXE` writes `mb_NNN.avi` into the `captures=` dir; a new
-  file starts on each video-mode change (the tiny `mb_000.avi` is the text
-  mode prelude).
-- Codec: ZMBV (lossless) 640×480 + PCM s16le audio — pixel-exact frames and
-  raw audio, suitable for palette comparison and music-schedule
-  verification (e.g. interest-rounding boundaries, music order jumps).
-- Frames: `ffmpeg -i mb_001.avi -vf fps=1/10 out_%02d.png`.
-- Audio: `ffmpeg -i mb_001.avi -vn audio.wav`.
+| Call | Purpose |
+|---|---|
+| `GET /status` | Running state and current program, e.g. `"program":"MB"`, `"canonical_name":"C:\\MB.EXE"` |
+| `GET /video/frame?format=png&mode=raw` | Current frame as a PNG at the native 640x480. `mode=rendered` gives the scaled window image instead |
+| `POST /input/sequence` | Timed key events: `{"events":[{"type":"key","key":"KBD_enter","pressed":true,"t":0}, ...]}`, `t` in ms from the start of the sequence |
+| `POST /input/type` | Type text: `{"text":"...","cps":15}` |
+| `POST /dosbox/shutdown` | Quit the emulator |
 
-## Limitations
+A screenshot, two key taps and a shutdown:
 
-- No conditional logic: choreographies must be timed open-loop. For long
-  experiments, prefer sequences that are state-insensitive (repeated ESC) or
-  end in an idle state, and verify by reviewing the AVI.
-- **No config file ships** — the game uses factory defaults (cash 750,
-  15 rounds) until the options menu writes **`OPTIONS.CFG`** (17 bytes,
-  format in `file-formats.md`) next to MB.EXE on options exit (a file
-  named "ASETUK.DAT" is ignored by the game).
-  To vary options, pre-write `OPTIONS.CFG` into the scratch dir.
-- **Capture numbering continues across runs** in the same `captures=`
-  dir, and a killed run's ZMBV AVI is still readable — wipe or rename
-  the captures dir between runs or you WILL mis-attribute footage
-  (this once cost an hour).
-- DOSBox-X's DOS shell processes `>` redirects **inside `rem` lines** —
-  keep redirect arrows out of autoexec comments (stray 0-byte files).
-- ffmpeg on ZMBV: use output-side seek (`-i file -ss N`); input-side
-  seek lands on non-keyframes and fails to decode.
-- `cycles=max` runs the game loop UNTHROTTLED (the original's pacing is
-  a calibrated TP7 Delay()-style loop that fast CPUs defeat). PIT-tick
-  timing (e.g. the time limit) stays wall-clock-correct, but frame-tied
-  timing comparisons need a calibrated fixed-cycles run.
-- DOSBox-X runs a visible window (no true headless mode used here);
-  `-silent` exists but its interaction with `dx-capture` is unverified.
+```powershell
+function Shot($name) {
+    Invoke-WebRequest "$api/video/frame?format=png&mode=raw" -Headers $h -OutFile "build\dosbox\$name.png" -UseBasicParsing
+}
+
+# Key down at t = 0, up at t = $ms. A longer $ms holds the key.
+function Tap($key, $ms = 80) {
+    $events = @(
+        @{ type = 'key'; key = "KBD_$key"; pressed = $true;  t = 0 },
+        @{ type = 'key'; key = "KBD_$key"; pressed = $false; t = $ms })
+    Invoke-RestMethod "$api/input/sequence" -Method Post -Headers $h -ContentType 'application/json' -Body (@{ events = $events } | ConvertTo-Json -Depth 4) | Out-Null
+}
+
+Start-Sleep -Seconds 3
+Shot title
+Tap enter                  # title -> main menu
+Start-Sleep -Seconds 3     # let the fade finish
+Tap down                   # cursor from New game to Options
+Start-Sleep -Milliseconds 500
+Shot main-menu
+
+Invoke-RestMethod "$api/dosbox/shutdown" -Method Post -Headers $h | Out-Null
+$p.WaitForExit(10000)
+```
+
+One sequence can hold several taps: give each event its own `t`. Two taps
+250 ms apart are a press and a release at 0 and 80, then at 250 and 330.
+
+## Key names
+
+Keys are the emulator's `KBD_` names. An unknown name is refused with
+`400 Unknown key`, which makes a name cheap to check. Names used with this
+game:
+
+- `KBD_enter`, `KBD_esc`, `KBD_up`, `KBD_down`, `KBD_left`, `KBD_right`
+- the numpad, which holds player 1's default controls: `KBD_kp1` .. `KBD_kp9`
+- `KBD_pagedown`, `KBD_pageup`, `KBD_tab`, `KBD_grave`
+- letters `KBD_a` .. `KBD_z`, digits `KBD_0` .. `KBD_9`, function keys
+  `KBD_f1` .. `KBD_f12`
+
+## More of the API
+
+The emulator serves a Swagger UI with the full endpoint list at
+`http://127.0.0.1:8386`. Endpoints likely to be useful here that this recipe
+has not exercised:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /memory/:segment/:offset/:len` | Read emulated memory |
+| `POST /capture/video/start`, `/capture/video/stop` | ZMBV video capture |
+| `POST /script/load`, `/script/start` | Run a sandboxed Lua script on the emulation thread, for frame-accurate waits and key presses |
+
+## Limits
+
+- Injected input is paced in wall-clock milliseconds, so a busy host can
+  shift where a key lands. Keep a margin around palette fades, which swallow
+  keys (see the quirks in the setup doc).
+- No pause or single-frame-step endpoint was found. Use a Lua script when a
+  capture has to land on an exact frame.
+- Runs are not bit-reproducible by default: the game seeds its RNG from the
+  clock.
+- The emulator opens a visible window. A second `--conf` can move it to
+  another monitor and mute it (see the setup doc).
+
+## Earlier recipe
+
+Before 2026-10-05 this page described a DOSBox-X rig: AUTOTYPE keystrokes on
+a fixed pace, `dx-capture` video, and ffmpeg to pull frames out of it. It
+worked, but open-loop only, with no way to look at the screen before the next
+key. That version of the page is in the git history.

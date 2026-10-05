@@ -7,6 +7,10 @@
 static Texture2D atlas;
 static bool      atlas_loaded = false;
 
+/* Same sheet with colour index 0 drawn as black: the original's blits copy
+ * every pixel (BGI COPY_PUT, seg_1028:1fac), which the edge strips rely on. */
+static Texture2D atlas_opaque;
+
 /* Source rectangle lookup: indexed by tile byte value (0-255) */
 static Rectangle tile_rects[256];
 static bool      tile_valid[256];
@@ -174,8 +178,13 @@ bool sprites_init(void)
     }
     memcpy(game_palette, palette, sizeof(game_palette));
 
-    /* Make color index 0 transparent in the RGBA data */
     uint8_t *rgba = (uint8_t *)img.data;
+    for (int i = 0; i < SPY_WIDTH * SPY_HEIGHT; i++) {
+        rgba[i * 4 + 3] = 255;
+    }
+    atlas_opaque = LoadTextureFromImage(img);
+
+    /* Make color index 0 transparent in the RGBA data */
     for (int i = 0; i < SPY_WIDTH * SPY_HEIGHT; i++) {
         if (indexed[i] == 0) {
             rgba[i * 4 + 3] = 0;  /* set alpha to 0 */
@@ -212,6 +221,7 @@ void sprites_cleanup(void)
 {
     if (atlas_loaded) {
         UnloadTexture(atlas);
+        UnloadTexture(atlas_opaque);
         atlas_loaded = false;
     }
 }
@@ -228,6 +238,14 @@ void sprites_draw_tile(uint8_t tile_byte, int x, int y)
     Rectangle src = sprites_get_tile_rect(tile_byte);
     Rectangle dst = { (float)x, (float)y, (float)SPRITE_W, (float)SPRITE_H };
     DrawTexturePro(atlas, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
+}
+
+void sprites_draw_region(int src_x, int src_y, int w, int h, int x, int y)
+{
+    if (!atlas_loaded) return;
+    Rectangle src = { (float)src_x, (float)src_y, (float)w, (float)h };
+    Rectangle dst = { (float)x, (float)y, (float)w, (float)h };
+    DrawTexturePro(atlas_opaque, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
 }
 
 Texture2D sprites_get_atlas(void)

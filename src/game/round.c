@@ -255,13 +255,6 @@ int round_count_alive(const Player players[], int num_players)
     return alive;
 }
 
-bool round_check_exit_tile(const Player *p, const TileMap *map)
-{
-    int row = pixel_to_tile_row(p->x_pos);
-    int col = pixel_to_tile_col(p->y_pos);
-    return map_get_tile(map, row, col) == 'k';
-}
-
 int round_count_treasures(const TileMap *map)
 {
     /* Count cash treasure tiles matching decompiled FUN_1000_6ddc (seg_1000:4286-4311):
@@ -361,6 +354,15 @@ static RoundState round_step(Round *r, Player players[], int num_players)
 
     /* Fade-in: advance overlay from black to clear, then start gameplay */
     if (r->state == ROUND_FADE_IN) {
+        if (r->fade_step == 0 && !r->darkness_enabled) {
+            /* With the lights on, every monster gets one call of the
+             * movement routine before the fade-in (FUN_1000_758a,
+             * seg_1000:7131-7134): it steps a pixel, or digs at or takes
+             * what it faces. */
+            bombs_set_entity_list(r->entity_head);
+            entities_round_start_step(r->entity_head, &r->map,
+                                      players, num_players);
+        }
         r->fade_step++;
         if (r->fade_step >= ROUND_FADE_STEPS) {
             r->state = ROUND_RUNNING;
@@ -501,12 +503,8 @@ static RoundState round_step(Round *r, Player players[], int num_players)
                     if (bomb_place(&players[i], &r->map) && is_creature) {
                         int sr = pixel_to_tile_row(players[i].x_pos + SPRITE_W / 2);
                         int sc = pixel_to_tile_col(players[i].y_pos + SPRITE_H / 2);
-                        Entity *e = entity_spawn_creature(i, sc, sr);
+                        Entity *e = entity_spawn_creature(i, &players[i], sc, sr);
                         if (e) {
-                            /* Clone inherits the owner's direction and
-                             * facing (seg_1000:2575-2576) */
-                            e->direction = players[i].direction;
-                            e->prev_direction = players[i].last_direction;
                             entity_list_add(&r->entity_head, e);
                         }
                     }
@@ -535,10 +533,6 @@ static RoundState round_step(Round *r, Player players[], int num_players)
         }
     }
 
-    /* Entity damage: every frame (matching decompiled monster_player_collision
-     * at seg_1000:7261, outside any frame-counter modulo check) */
-    entities_deal_damage(r->entity_head, players, num_players);
-
     /* === Every 5 frames === */
     if (r->frame_counter % 5 == 0) {
         /* Entity activation: every 5 frames (matching decompiled
@@ -549,12 +543,6 @@ static RoundState round_step(Round *r, Player players[], int num_players)
         int alive = round_count_alive(players, num_players);
 
         if (r->single_player) {
-            /* Single-player: check exit tile */
-            if (alive > 0 && round_check_exit_tile(&players[0], &r->map)) {
-                r->end_reason = ROUND_END_EXIT;
-                round_begin_fade_out(r);
-                return r->state;
-            }
             /* Single-player death: inactivity ramp before ending round.
              * (from decompiled lines 7170-7179)
              * Lives decrement and retry/game-over decision happen in main.c
@@ -632,22 +620,27 @@ static RoundState round_step(Round *r, Player players[], int num_players)
         }
     }
 
-    /* === Every 26 frames === */
-    if (r->frame_counter % AI_DECISION_TICK == 0) {
-        int treasures = round_count_treasures(&r->map);
-        Entity *e = r->entity_head;
-        while (e) {
-            if (!e->dead) {
-                ai_update(e, &r->map, players, num_players,
-                          r->frame_counter, r->entity_head, treasures);
-            }
-            e = e->next;
+    /* Monsters, every frame, one at a time in list order
+     * (monster_player_collision, seg_1000:7261): contact damage, the move,
+     * then the AI, which reads its own frame counters. The treasure count
+     * the AI uses is taken once, before any monster acts (seg_1000:5830). */
+    {
+        int treasures = (r->frame_counter % AI_DECISION_TICK == 0)
+                            ? round_count_treasures(&r->map) : 0;
+        for (Entity *e = r->entity_head; e; e = e->next) {
+            entity_tick(e, &r->map, players, num_players, r->frame_counter);
+            ai_update(e, &r->map, players, num_players,
+                      r->frame_counter, r->entity_head, treasures);
         }
     }
 
-    /* Entity movement (every frame, throttled internally by speed_divisor) */
-    entities_update(r->entity_head, &r->map, players, num_players,
-                    r->frame_counter);
+    /* Single-player exit, acted on every frame (seg_1000:7268-7271): set
+     * when player 1 pushes into the exit tile. */
+    if (r->single_player && players[0].reached_exit) {
+        r->end_reason = ROUND_END_EXIT;
+        round_begin_fade_out(r);
+        return r->state;
+    }
 
     return r->state;
 }
@@ -706,33 +699,56 @@ void round_draw(Round *r, const Player players[], int num_players)
     Texture2D atlas = sprites_get_atlas();
     Entity *e = r->entity_head;
     while (e) {
-        if (!e->dead) {
+        if (!e->body.dead) {
             /* In darkness mode, only draw entities on revealed tiles */
             if (r->darkness_enabled) {
-                int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-                int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+                int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+                int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
                 if (!visibility_is_revealed(&r->map, erow, ecol)) {
                     e = e->next;
                     continue;
                 }
             }
-            int draw_x = e->x_pos;
-            int draw_y = e->y_pos + shake_offset;
+            int draw_x = e->body.x_pos;
+            int draw_y = e->body.y_pos + shake_offset;
             if (draw_y >= -SPRITE_H && draw_y < 480 + SPRITE_H) {
-                /* Sprite set: type 0-3 → sets 8-11 */
+                /* Sprite set: type 0-3 → sets 8-11. A Robot is drawn with
+                 * its owner's walk set, whose sprite table the spawner
+                 * copies (seg_1000:2549-2550). */
+                bool moving = (e->body.direction != DIR_STOP);
                 int variant = 8 + e->type;
+                if (entity_is_robot(e)) {
+                    /* walk sets 0-3, dig sets 4-7, as for the owner */
+                    variant = e->owner_player < MAX_PLAYERS ? e->owner_player : 0;
+                    if (moving && e->body.digging) variant += 4;
+                }
 
-                /* Direction mapping (same as players):
+                /* Direction mapping (same as players): the current
+                 * direction while moving, the facing when stopped.
                  * Sprite bands: 0=RIGHT, 1=LEFT, 2=UP, 3=DOWN */
-                int dir = e->direction;
+                int dir = moving ? e->body.direction : e->body.last_direction;
                 if (dir < 0 || dir > 4) dir = 0;
                 int spr_dir = dir_to_spr[dir];
 
-                /* Animation frame: anim_state cycles 0-7, map to 4 sprite frames */
-                int frame = e->anim_state % 4;
+                /* The same 30-step counter and thresholds as a player
+                 * (animate_player_sprite); it advances only on the frames
+                 * the monster is moved. Stopped: standing frame 0. */
+                int af = e->body.anim_frame;
+                int frame;
+                if (!moving)      frame = 0;
+                else if (af < 5)  frame = 0;
+                else if (af < 10) frame = 1;
+                else if (af < 15) frame = 2;
+                else if (af < 20) frame = 3;
+                else if (af < 25) frame = 2;
+                else              frame = 1;
 
+                /* The original blits the whole 10x10 cell in copy mode
+                 * (blit_sprite(0, ...), seg_1000:3782-3842): its black
+                 * pixels are drawn and it covers what is underneath. */
                 Rectangle src = sprites_get_player_rect(variant, spr_dir, frame);
-                DrawTextureRec(atlas, src, (Vector2){draw_x, draw_y}, WHITE);
+                sprites_draw_region((int)src.x, (int)src.y, (int)src.width,
+                                    (int)src.height, draw_x, draw_y);
             }
         }
         e = e->next;
@@ -792,8 +808,11 @@ void round_draw(Round *r, const Player players[], int num_players)
                  * options, not colors.) */
                 variant = i;
             }
+            /* Copy-mode blit of the whole cell, as for monsters
+             * (seg_1000:3889). */
             Rectangle src = sprites_get_player_rect(variant, spr_dir, frame);
-            DrawTextureRec(atlas, src, (Vector2){draw_x, draw_y}, WHITE);
+            sprites_draw_region((int)src.x, (int)src.y, (int)src.width,
+                                (int)src.height, draw_x, draw_y);
         }
     }
 

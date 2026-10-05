@@ -1766,9 +1766,9 @@ void test_push_refused_by_live_entity_at_destination(void)
     push_setup_bomb(&map);
 
     memset(&e, 0, sizeof(e));
-    e.x_pos = (int16_t)tile_to_pixel_x(20);   /* row 20 */
-    e.y_pos = (int16_t)tile_to_pixel_y(21);   /* col 21: DOWN neighbor */
-    e.dead = 0;
+    e.body.x_pos = (int16_t)tile_to_pixel_x(20);   /* row 20 */
+    e.body.y_pos = (int16_t)tile_to_pixel_y(21);   /* col 21: DOWN neighbor */
+    e.body.dead = 0;
     e.next = NULL;
     bombs_set_entity_list(&e);
     before = map;
@@ -1791,9 +1791,9 @@ void test_push_ignores_dead_entity_at_destination(void)
     push_setup_bomb(&map);
 
     memset(&e, 0, sizeof(e));
-    e.x_pos = (int16_t)tile_to_pixel_x(20);
-    e.y_pos = (int16_t)tile_to_pixel_y(21);
-    e.dead = 1;
+    e.body.x_pos = (int16_t)tile_to_pixel_x(20);
+    e.body.y_pos = (int16_t)tile_to_pixel_y(21);
+    e.body.dead = 1;
     e.next = NULL;
     bombs_set_entity_list(&e);
 
@@ -1811,11 +1811,11 @@ void test_push_refused_by_entity_later_in_list(void)
     push_setup_bomb(&map);
 
     memset(&far_e, 0, sizeof(far_e));
-    far_e.x_pos = (int16_t)tile_to_pixel_x(5);
-    far_e.y_pos = (int16_t)tile_to_pixel_y(5);
+    far_e.body.x_pos = (int16_t)tile_to_pixel_x(5);
+    far_e.body.y_pos = (int16_t)tile_to_pixel_y(5);
     memset(&near_e, 0, sizeof(near_e));
-    near_e.x_pos = (int16_t)tile_to_pixel_x(19);   /* LEFT neighbor */
-    near_e.y_pos = (int16_t)tile_to_pixel_y(20);
+    near_e.body.x_pos = (int16_t)tile_to_pixel_x(19);   /* LEFT neighbor */
+    near_e.body.y_pos = (int16_t)tile_to_pixel_y(20);
     far_e.next = &near_e;
     bombs_set_entity_list(&far_e);
     before = map;

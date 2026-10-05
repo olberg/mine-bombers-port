@@ -31,10 +31,12 @@ Named and key unnamed functions across all segments, grouped by module.
 ### Player & Movement
 | Line | Function | Purpose |
 |------|----------|---------|
-| — | `move_player` | Player physics and movement |
-| — | `animate_player_sprite` | Character animation state machine |
+| 3860 | `move_player` | Movement, digging and pickups for one player record; monsters go through it too |
+| 3770 | `animate_player_sprite` | Character animation state machine |
 | — | `player_collision_check` | Collision with map tiles |
-| — | `monster_player_collision` | NPC/monster collision |
+| 5803 | `monster_player_collision` | Per-frame monster pass: contact damage, movement, AI |
+| 3311 | `FUN_1000_5073` | Dig and pickup handler for the tile ahead; casts the vision fan in darkness |
+| 3082 | `FUN_1000_4a51` | One vision ray of the darkness fan |
 | — | `process_player_input` | Read keyboard state for all players |
 | — | `process_all_key_inputs` | Process key inputs with configurable params |
 
@@ -50,6 +52,11 @@ Named and key unnamed functions across all segments, grouped by module.
 | Line | Function | Purpose |
 |------|----------|---------|
 | — | `move_entity_toward_target` | Pathfinding for monsters |
+| 5272 | `FUN_1000_83a2` | Blocked test for a monster's random turn |
+| 2494 | `FUN_1000_3b40` | Robot weapon: spawn a monster for a player |
+| 4675 | `FUN_1000_758a` | Round start, darkness off: one `move_player` call per monster |
+
+See [AI & Monster Behavior](../ai/ai-behavior.md) for what these do.
 
 (`apply_bot_ai`, formerly listed here as the "bot AI entry point", is actually the shop screen in seg_1010 — see below. The decompiled name is a mislabel; the game has no bot players.)
 
@@ -63,7 +70,8 @@ Named and key unnamed functions across all segments, grouped by module.
 ### Rendering (calls into seg_1010/1028)
 | Line | Function | Purpose |
 |------|----------|---------|
-| — | `redraw_game_screen` | Full game screen redraw |
+| 2906 | `redraw_game_screen` | Full game screen redraw |
+| 2823 | `draw_map_edges` | Paint edge strips on the four neighbours of a tile (see [Graphics Pipeline](../rendering/graphics-pipeline.md#terrain-edge-strips)) |
 | 7037 | (inline) | `load_and_display_image` for title screen |
 
 ## Segment 1008 — Sound & Keyboard (seg_1008_sound.c)

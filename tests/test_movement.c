@@ -893,9 +893,84 @@ void test_dig_wall_set_tile_with_hp_can_reach_zero(void)
     TEST_ASSERT_EQUAL_HEX8('0', map.tiles[5][4]);
 }
 
+/* ---- Only floor can be entered; a pickup is taken from the tile before it ---- */
+
+void test_pickup_is_taken_before_the_step(void)
+{
+    map.tiles[6][5] = 0x95;                 /* coin right of the player */
+    map.collision[6][5] = 0;
+    p.direction = DIR_RIGHT;
+    int16_t x = p.x_pos;
+
+    /* At the tile centre, facing the coin: no step, the coin is taken */
+    TEST_ASSERT_FALSE(player_move(&p, &map));
+    TEST_ASSERT_EQUAL_INT16(x, p.x_pos);
+    TEST_ASSERT_EQUAL_UINT8('0', map.tiles[6][5]);
+    TEST_ASSERT_EQUAL_INT32(10, p.earned);
+
+    /* Next frame the tile is floor and the player steps */
+    TEST_ASSERT_TRUE(player_move(&p, &map));
+    TEST_ASSERT_EQUAL_INT16(x + 1, p.x_pos);
+}
+
+void test_switch_tile_cannot_be_entered(void)
+{
+    map.tiles[6][5] = 0xB4;
+    map.collision[6][5] = 0;
+    p.direction = DIR_RIGHT;
+    int16_t x = p.x_pos;
+    for (int i = 0; i < 5; i++) player_move(&p, &map);
+    TEST_ASSERT_EQUAL_INT16(x, p.x_pos);
+}
+
+void test_exit_is_reached_by_pushing_into_it(void)
+{
+    g_players[0] = p;                       /* the mover is player 1 */
+    map.tiles[6][5] = 'k';
+    p.direction = DIR_RIGHT;
+    int16_t x = p.x_pos;
+
+    TEST_ASSERT_EQUAL_UINT8(0, p.reached_exit);
+    player_move(&p, &map);
+    TEST_ASSERT_EQUAL_UINT8(1, p.reached_exit);
+    TEST_ASSERT_EQUAL_INT16(x, p.x_pos);
+    TEST_ASSERT_EQUAL_UINT8('k', map.tiles[6][5]);
+}
+
+void test_exit_ignores_anyone_but_player_one(void)
+{
+    g_players[0] = p;
+    Player other;
+    player_init_defaults(&other, 1);
+    strcpy(other.name, "2 SOMEONE");
+    other.x_pos = p.x_pos;
+    other.y_pos = p.y_pos;
+    other.direction = DIR_RIGHT;
+    map.tiles[6][5] = 'k';
+
+    player_move(&other, &map);
+    TEST_ASSERT_EQUAL_UINT8(0, other.reached_exit);
+}
+
+void test_medkit_heals_a_player(void)
+{
+    map.tiles[6][5] = 'm';
+    map.collision[6][5] = 0;
+    p.direction = DIR_RIGHT;
+    p.health = 40;
+    player_move(&p, &map);
+    TEST_ASSERT_EQUAL_INT16(p.max_health, p.health);
+    TEST_ASSERT_EQUAL_UINT8('0', map.tiles[6][5]);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_pickup_is_taken_before_the_step);
+    RUN_TEST(test_switch_tile_cannot_be_entered);
+    RUN_TEST(test_exit_is_reached_by_pushing_into_it);
+    RUN_TEST(test_exit_ignores_anyone_but_player_one);
+    RUN_TEST(test_medkit_heals_a_player);
     RUN_TEST(test_dig_bomb_drains_collision_but_rests_at_one);
     RUN_TEST(test_dig_bomb_huge_damage_clamps_to_one);
     RUN_TEST(test_dig_bomb_never_cleared_by_repeated_digs);

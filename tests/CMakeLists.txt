@@ -73,6 +73,7 @@ add_unity_test(test_map_loader test_map_loader.c
     ${CMAKE_SOURCE_DIR}/src/game/visibility.c
     ${CMAKE_SOURCE_DIR}/src/game/entity.c
     ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_edges.c
     ${CMAKE_SOURCE_DIR}/src/game/sprites.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
@@ -107,9 +108,14 @@ add_unity_test(test_sprites test_sprites.c
     ${CMAKE_SOURCE_DIR}/src/game/sprites.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c)
 
+# Map edges test
+add_unity_test(test_map_edges test_map_edges.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_edges.c)
+
 # Map renderer test
 add_unity_test(test_map_renderer test_map_renderer.c
     ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_edges.c
     ${CMAKE_SOURCE_DIR}/src/game/sprites.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c)
 
@@ -118,6 +124,7 @@ add_unity_test(test_movement test_movement.c
     ${CMAKE_SOURCE_DIR}/src/game/movement.c
     ${CMAKE_SOURCE_DIR}/src/game/visibility.c
     ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_edges.c
     ${CMAKE_SOURCE_DIR}/src/game/sprites.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/game/player.c
@@ -140,6 +147,7 @@ add_unity_test(test_entity test_entity.c
     ${CMAKE_SOURCE_DIR}/src/game/bombs.c
     ${CMAKE_SOURCE_DIR}/src/game/weapons.c
     ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_edges.c
     ${CMAKE_SOURCE_DIR}/src/game/sprites.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
@@ -158,6 +166,7 @@ add_unity_test(test_ai test_ai.c
     ${CMAKE_SOURCE_DIR}/src/game/bombs.c
     ${CMAKE_SOURCE_DIR}/src/game/weapons.c
     ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_edges.c
     ${CMAKE_SOURCE_DIR}/src/game/sprites.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
@@ -175,6 +184,7 @@ add_unity_test(test_bombs test_bombs.c
     ${CMAKE_SOURCE_DIR}/src/game/map.c
     ${CMAKE_SOURCE_DIR}/src/game/entity.c
     ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_edges.c
     ${CMAKE_SOURCE_DIR}/src/game/sprites.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
@@ -188,6 +198,7 @@ add_unity_test(test_hud test_hud.c
     ${CMAKE_SOURCE_DIR}/src/game/map_thumbnail.c
     ${CMAKE_SOURCE_DIR}/src/game/player.c
     ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_edges.c
     ${CMAKE_SOURCE_DIR}/src/game/weapons.c
     ${CMAKE_SOURCE_DIR}/src/game/sprites.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
@@ -203,6 +214,7 @@ add_unity_test(test_shop test_shop.c
     ${CMAKE_SOURCE_DIR}/src/game/config.c
     ${CMAKE_SOURCE_DIR}/src/game/hud.c
     ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_edges.c
     ${CMAKE_SOURCE_DIR}/src/game/sprites.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/loaders/font_loader.c
@@ -229,6 +241,7 @@ add_unity_test(test_round test_round.c
     ${CMAKE_SOURCE_DIR}/src/game/player.c
     ${CMAKE_SOURCE_DIR}/src/game/map.c
     ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_edges.c
     ${CMAKE_SOURCE_DIR}/src/game/movement.c
     ${CMAKE_SOURCE_DIR}/src/game/bombs.c
     ${CMAKE_SOURCE_DIR}/src/game/weapons.c
@@ -278,6 +291,7 @@ add_unity_test(test_random_map test_random_map.c
     ${CMAKE_SOURCE_DIR}/src/game/visibility.c
     ${CMAKE_SOURCE_DIR}/src/game/entity.c
     ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_edges.c
     ${CMAKE_SOURCE_DIR}/src/game/sprites.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
@@ -295,6 +309,7 @@ add_unity_test(test_explosion_damage test_explosion_damage.c
     ${CMAKE_SOURCE_DIR}/src/game/map.c
     ${CMAKE_SOURCE_DIR}/src/game/entity.c
     ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_edges.c
     ${CMAKE_SOURCE_DIR}/src/game/sprites.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
@@ -306,6 +321,7 @@ add_unity_test(test_explosion_damage test_explosion_damage.c
 add_unity_test(test_visibility test_visibility.c
     ${CMAKE_SOURCE_DIR}/src/game/visibility.c
     ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_edges.c
     ${CMAKE_SOURCE_DIR}/src/game/sprites.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c)
 
@@ -349,6 +365,7 @@ add_unity_test(test_map_picker test_map_picker.c
     ${CMAKE_SOURCE_DIR}/src/game/visibility.c
     ${CMAKE_SOURCE_DIR}/src/game/entity.c
     ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_edges.c
     ${CMAKE_SOURCE_DIR}/src/game/sprites.c
     ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
     ${CMAKE_SOURCE_DIR}/src/loaders/voc_loader.c

@@ -6,6 +6,7 @@
 #include "game/bombs.h"
 #include "audio/sfx.h"
 #include <raylib.h>
+#include <string.h>
 #include "util/prng.h"
 
 bool tile_is_passable(uint8_t tile)
@@ -14,17 +15,15 @@ bool tile_is_passable(uint8_t tile)
 }
 
 /*
- * Movement-specific passability check. In the original (seg_1000:3898-4059),
- * movement only allows '0', 'f', 0xAF. However, pickups with collision=0
- * (treasures, stat gems, health, arrows) must also be walkable since the port
- * doesn't yet implement the original's adjacent-tile pickup mechanism.
+ * Movement passability, as in the original (seg_1000:3898-4059): only '0',
+ * 'f' and 0xAF can be entered. A pickup is never walked onto; standing at
+ * the tile centre and pushing into it runs the pickup handler, which turns
+ * it into floor, and the step happens on the next frame.
  */
 static bool move_passable(const TileMap *map, int row, int col)
 {
     if (row < 0 || row >= MAP_ROWS || col < 0 || col >= MAP_COLS) return false;
-    uint8_t tile = map->tiles[row][col];
-    if (tile == '0' || tile == 'f' || tile == 0xAF) return true;
-    return map->collision[row][col] == 0;
+    return tile_is_passable(map->tiles[row][col]);
 }
 
 /*
@@ -384,10 +383,10 @@ bool player_check_pickup(Player *p, TileMap *map, int row, int col)
      * tile center toward a passable tile, bump the tiles-walked stat
      * (match-stats dword 9) and, with darkness active, cast the player's
      * vision fan. This is the ONLY reveal trigger — there is no per-frame
-     * or round-start reveal. Entities never reach this path
-     * (their stats pointer is null in the original; the port keeps entity
-     * movement separate). */
-    if (tile == '0' || tile == 'f' || tile == 0xAF) {
+     * or round-start reveal. The original gates it on the stats pointer
+     * (+0xFF), which is null for monsters, so they neither count tiles nor
+     * light up the dark. */
+    if ((tile == '0' || tile == 'f' || tile == 0xAF) && p->has_stats) {
         p->match_stats[STAT_TILES_WALKED] += 1;
         if (map->darkness_enabled) {
             visibility_reveal_player(map, p);
@@ -407,9 +406,24 @@ bool player_check_pickup(Player *p, TileMap *map, int row, int col)
     case 's':  cash_add = 1000; break;  /* 0x73 */
     case 'm':
         sfx_play(SFX_PICAXE);
-        p->health = p->max_health;
+        /* +0x1B = +0x1D unless +0x103 is set (seg_1000:3646-3648). For a
+         * player that is health = max. For a monster those fields are its
+         * contact damage and hit points: one that takes a medkit while
+         * still asleep hits as hard as it has hit points, an awake one
+         * just uses the medkit up. */
+        if (!p->awake) {
+            p->health = p->max_health;
+        }
         pickup_clear_tile(map, row, col);
         return true;
+    case 'k':
+        /* Exit: the original compares the mover's name with player 1's
+         * (seg_1000:3637-3642), so only player 1 can leave; the round loop
+         * acts on it in single-player. The tile stays. */
+        if (strcmp(p->name, g_players[0].name) == 0) {
+            p->reached_exit = 1;
+        }
+        return false;
     case 0xB3:
         if (g_num_active_players == 1) {
             p->lives++;
@@ -526,7 +540,9 @@ bool player_check_pickup(Player *p, TileMap *map, int row, int col)
          * also counts the treasure in the match-stats block (+0x10,
          * seg_1000:3513-3517). */
         p->earned += cash_add;
-        p->match_stats[STAT_TREASURES] += 1;
+        if (p->has_stats) {
+            p->match_stats[STAT_TREASURES] += 1;
+        }
         pickup_clear_tile(map, row, col);
         return true;
     }

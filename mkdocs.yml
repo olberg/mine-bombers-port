@@ -30,4 +30,4 @@ nav:
       - Music System: reference/audio/music-system.md
     - Testing:
       - DOSBox Setup: reference/testing/dosbox-setup.md
-      - DOSBox-X Automation: reference/testing/dosbox-automation.md
+      - DOSBox Automation: reference/testing/dosbox-automation.md

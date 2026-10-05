@@ -576,13 +576,13 @@ bool bombs_check_player_damage(TileMap *map, int col, int row, uint8_t damage)
      * Iterates linked list, checks position, subtracts damage from entity HP. */
     Entity *e = s_entity_head;
     while (e) {
-        if (!e->dead) {
-            int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-            int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+        if (!e->body.dead) {
+            int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+            int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
             if (erow == row && ecol == col) {
                 found = true;
-                e->health -= (int16_t)damage;
-                if (e->health < 1) {
+                e->body.max_health -= (int16_t)damage;
+                if (e->body.max_health < 1) {
                     /* Entity death (seg_1010:5444-5467).
                      * Play death sound for entities too. */
                     if (damage != 0) {
@@ -699,9 +699,9 @@ bool bomb_try_push(TileMap *map, int col, int row, uint8_t dir)
     if (is_player_on_tile(dest_col, dest_row))
         return false;
     for (Entity *e = s_entity_head; e; e = e->next) {
-        if (e->dead) continue;
-        int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-        int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+        if (e->body.dead) continue;
+        int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+        int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
         if (erow == dest_row && ecol == dest_col) return false;
     }
 

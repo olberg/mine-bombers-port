@@ -58,6 +58,7 @@ add_executable(minebombers
     src/game/weapons.c
     src/game/sprites.c
     src/game/map_renderer.c
+    src/game/map_edges.c
     src/game/movement.c
     src/game/bombs.c
     src/game/entity.c

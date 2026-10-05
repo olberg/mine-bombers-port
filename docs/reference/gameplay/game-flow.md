@@ -128,6 +128,15 @@ if frame_counter % 5 == 0:
         process_weapons()
         check_player_death()
 
+— Monsters, every frame (seg_1000:7261). One at a time in list order:
+— contact damage, move_player(), then the AI on its own frame counters.
+monster_player_collision()
+
+— Single-player exit (seg_1000:7268-7271). The flag is set when player 1
+— pushes into the exit tile.
+if num_players == 1 && g_sp_win_condition:
+    g_round_over = 1
+
 — Rendering: no full redraw and no minimap here. redraw_game_screen() runs
 — once before the loop (see Round Loop); during the loop a tile is redrawn
 — when it changes (mark_tile_for_redraw, seg_1010:5258-5275).

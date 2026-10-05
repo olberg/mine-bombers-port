@@ -25,8 +25,8 @@ Reconstructed from how the code accesses player data relative to the base pointe
 
 | Offset | Size | Field | Evidence |
 |--------|------|-------|----------|
-| +0x1B | 2 | max_health | `DAT_1038_1c05 = DAT_1038_1c07` (seg_1010:7097) |
-| +0x1D | 2 | health | `DAT_1038_1c07 = steel_plates * 100 + 100` (seg_1010:7090) |
+| +0x1B | 2 | health | `DAT_1038_1c05 = DAT_1038_1c07` (seg_1010:7097); a medkit does the same, `+0x1B = +0x1D` (seg_1000:3646-3648) |
+| +0x1D | 2 | max_health | `DAT_1038_1c07 = steel_plates * 100 + 100` (seg_1010:7090) |
 | +0x21 | 1 | dead flag | `cmp byte [1C0B],0` in FUN_1000_a17c (MB.EXE file offset 45464) |
 
 ### Sprite pointer tables (verified 2026-06-11)
@@ -107,6 +107,10 @@ is not a speed value.
 
 This region is the weapon/tool inventory: 16-bit counts at even offsets (+0xB0 small bomb through +0xE4 super drill), interleaved with the dig-tool counters (+0xD2/+0xD4/+0xD6) and steel plates (+0xE0). See the weapon table in [Game Mechanics](game-mechanics.md) for the per-weapon offsets. An earlier revision of this page described +0xD9-0xE6 as byte-sized boolean state flags — a misread of the decompiler's `undefined1` placeholders.
 
+## Monsters Use the Same Record
+
+A monster is one of these records on a linked list, moved by the same `move_player` routine. For a monster +0x1B is its contact damage and +0x1D its hit points, +0xFF (the match-stats pointer) is null, +0x103 is its awake flag (always 0 for a player), and +0x104 holds the list's next pointer where a player has the money-bomb counter. See [AI & Monster Behavior](../ai/ai-behavior.md) for the monster's view of the layout.
+
 ## Key Binding Storage (per player)
 
 Stored at fixed addresses, 8 values per player (see [Input System](../input/input-system.md) for scancodes):
@@ -140,6 +144,12 @@ The port replaces the original's 4 parallel global blocks with the
 `Player` struct array in `src/game/player.h` (`g_players[MAX_PLAYERS]`).
 The 0x10A stride is the key to decoding further fields — any access
 pattern repeating at +0x10A intervals is a field within the struct.
+
+A monster (`Entity` in `src/game/entity.h`) embeds a `Player` as its
+`body`, so the movement, dig and pickup code is shared as in the original.
+Three port fields stand in for what that code tests: `has_stats` (the
++0xFF pointer is set), `awake` (+0x103) and `reached_exit` (the original's
+`g_sp_win_condition` global, set when player 1 pushes into the exit tile).
 
 ## Players.dat Record (101 bytes)
 

@@ -7,10 +7,12 @@
 #include <string.h>
 #include <math.h>
 
-/* Names for the four monster types (from decompiled data) */
+/* Names of the four monster templates (seg_1010:5578-5611; strings at
+ * seg_1010:9D76, 9D80, 9D8D, 9D98) and of the Robot (9D9E). */
 static const char *ENTITY_NAMES[ENTITY_TYPE_COUNT] = {
-    "KarvaMies", "Creature", "Creature", "Alien"
+    "KarvaMies", "HarmaaPeikko", "LimaPeikko", "Alien"
 };
+#define ROBOT_NAME "Robot"
 
 /*
  * Decode spawn tile 'G'-'V' into type and initial direction.
@@ -19,8 +21,6 @@ static const char *ENTITY_NAMES[ENTITY_TYPE_COUNT] = {
  *   offset 1 → direction 2 (DIR_LEFT):  H/L/P/T
  *   offset 2 → direction 3 (DIR_UP):    I/M/Q/U
  *   offset 3 → direction 4 (DIR_DOWN):  J/N/R/V
- * (The values were always 1-4, but an earlier
- * DIR_* relabel made variant-0 monsters walk down instead of right.)
  */
 static bool decode_spawn_tile(uint8_t tile, uint8_t *out_type, uint8_t *out_dir)
 {
@@ -29,7 +29,6 @@ static bool decode_spawn_tile(uint8_t tile, uint8_t *out_type, uint8_t *out_dir)
     int index = tile - 'G';          /* 0-15 */
     *out_type = (uint8_t)(index / 4); /* 0-3 */
 
-    /* Direction within the group of 4 (from decompiled seg_1000:4626-4637) */
     switch (index % 4) {
     case 0: *out_dir = DIR_RIGHT; break;  /* G/K/O/S */
     case 1: *out_dir = DIR_LEFT;  break;  /* H/L/P/T */
@@ -48,6 +47,24 @@ static Entity *entity_alloc(void)
     return e;
 }
 
+/* The fields both spawners set (seg_1000:4600-4622, 2527-2573). */
+static void body_init(Entity *e, const char *name, int tile_col, int tile_row)
+{
+    Player *b = &e->body;
+    strncpy(b->name, name, sizeof(b->name) - 1);
+    b->dead = 0;
+    b->has_stats = 0;
+
+    /* The original stores the tile centre and draws at centre - 5; the
+     * port stores the top-left corner (row→X, col→Y). */
+    b->x_pos = (int16_t)(tile_row * TILE_SIZE);
+    b->y_pos = (int16_t)(tile_col * TILE_SIZE + MAP_Y_OFFSET);
+
+    /* +0xA2 starts at 1 in every template (DAT_1038_20b4 and siblings) */
+    b->anim_frame = 1;
+    e->next = NULL;
+}
+
 Entity *entity_spawn(uint8_t spawn_tile, int tile_col, int tile_row)
 {
     uint8_t type, dir;
@@ -56,118 +73,162 @@ Entity *entity_spawn(uint8_t spawn_tile, int tile_col, int tile_row)
     Entity *e = entity_alloc();
     if (!e) return NULL;
 
-    strncpy(e->name, ENTITY_NAMES[type], sizeof(e->name) - 1);
+    body_init(e, ENTITY_NAMES[type], tile_col, tile_row);
     e->type = type;
-    e->health = ENTITY_HEALTH[type];
-    e->max_health = ENTITY_HEALTH[type];
-    e->attack_power = ENTITY_ATTACK[type];
-    e->dead = 0;
-    e->active = 0;  /* starts dormant */
-
-    /* Position: top-left of tile (row→X, col→Y per original VGA convention).
-     * Original stores center (+5) but draws at pos-5; port skips the offset. */
-    e->x_pos = (int16_t)(tile_row * TILE_SIZE);
-    e->y_pos = (int16_t)(tile_col * TILE_SIZE + MAP_Y_OFFSET);
-
-    e->direction = dir;
-    e->prev_direction = dir;
+    e->body.health = ENTITY_ATTACK[type];
+    e->body.max_health = ENTITY_HEALTH[type];
+    e->body.digging_power = 0;
+    e->body.bonus_stat = ENTITY_DIG[type];
+    e->body.awake = 0;  /* starts dormant */
+    e->body.direction = dir;
+    e->body.last_direction = dir;
     e->speed_divisor = ENTITY_SPEED[type];
-
-    e->anim_state = 0;
     e->owner_player = 0xFF; /* no owner (map-spawned) */
-    e->next = NULL;
 
     return e;
 }
 
-Entity *entity_spawn_creature(int owner, int tile_col, int tile_row)
+Entity *entity_spawn_creature(int owner, const Player *owner_player,
+                              int tile_col, int tile_row)
 {
     Entity *e = entity_alloc();
     if (!e) return NULL;
 
-    /* Creature spawner (weapon 'n', FUN_1000_3b40) copies the bot template
-     * at 0x1038:0x2226: attack=1, health=100, speed=100.
-     * Values set at seg_1010:5630/5633/5634 (DAT_1038_232e/2241/2243). */
-    strncpy(e->name, "Creature", sizeof(e->name) - 1);
-    e->type = ENTITY_TYPE_2;
-    e->health = 100;
-    e->max_health = 100;
-    e->attack_power = 1;
-    e->dead = 0;
-    e->active = 1;  /* player-spawned creatures start active */
-
-    e->x_pos = (int16_t)(tile_row * TILE_SIZE);
-    e->y_pos = (int16_t)(tile_col * TILE_SIZE + MAP_Y_OFFSET);
-
-    e->direction = DIR_DOWN;
-    e->prev_direction = DIR_DOWN;
-    e->speed_divisor = 100;
-
-    e->anim_state = 0;
+    body_init(e, ROBOT_NAME, tile_col, tile_row);
+    e->type = ENTITY_TYPE_ROBOT;
+    e->body.health = ROBOT_ATTACK;
+    e->body.max_health = ROBOT_HEALTH;
+    e->body.awake = 1;  /* template +0x103 = 1 (DAT_1038_2329) */
+    e->body.direction = DIR_DOWN;
+    e->body.last_direction = DIR_DOWN;
+    e->speed_divisor = ROBOT_SPEED;
     e->owner_player = (uint8_t)owner;
-    e->next = NULL;
+
+    if (owner_player) {
+        /* Dig strength, direction and facing come from the owner
+         * (seg_1000:2551-2562, 2574-2575). While the owner's money bomb
+         * loan is running its +0xA8 carries the loan's 300, which the
+         * Robot does not get. */
+        e->body.bonus_stat = owner_player->bonus_stat;
+        e->body.digging_power = owner_player->digging_power;
+        if (owner_player->money_bomb_counter != 0) {
+            e->body.digging_power = (int16_t)(e->body.digging_power - 300);
+        }
+        e->body.direction = owner_player->direction;
+        e->body.last_direction = owner_player->last_direction;
+    }
 
     return e;
 }
 
-void entity_kill(Entity *e)
+bool entity_is_robot(const Entity *e)
 {
-    if (e) e->dead = 1;
+    return e && e->type == ENTITY_TYPE_ROBOT;
 }
 
-bool entity_move(Entity *e, const TileMap *map)
+void entity_kill(Entity *e)
 {
-    if (!e || e->dead || e->direction == DIR_STOP) return false;
+    if (e) e->body.dead = 1;
+}
 
-    int dx = 0, dy = 0;
-    switch (e->direction) {
-    case DIR_DOWN:  dy = 1;  break;
-    case DIR_UP:    dy = -1; break;
-    case DIR_LEFT:  dx = -1; break;
-    case DIR_RIGHT: dx = 1;  break;
+bool entity_move(Entity *e, TileMap *map, Player players[], int num_players)
+{
+    if (!e || e->body.dead) return false;
+
+    int32_t earned_before = e->body.earned;
+    int16_t dig_before = e->body.digging_power;
+
+    /* The same two calls the round loop makes for a player. */
+    bool moved = player_move(&e->body, map);
+    player_dig(&e->body, map);
+
+    /* What an awake Robot picks up is added to its owner's dig power and
+     * round earnings as well as to its own (seg_1000:3463-3496). */
+    if (entity_is_robot(e) && e->body.awake && players &&
+        e->owner_player < num_players) {
+        Player *owner = &players[e->owner_player];
+        owner->earned += e->body.earned - earned_before;
+        owner->digging_power =
+            (int16_t)(owner->digging_power + e->body.digging_power - dig_before);
     }
 
-    int new_x = e->x_pos + dx;
-    int new_y = e->y_pos + dy;
+    return moved;
+}
 
-    /* Check target tile for collision (entity is ~10x10 sprite).
-     * VGA convention: row from screen X, col from screen Y. */
-    int check_col, check_row;
-
-    if (dx > 0) {
-        check_row = pixel_to_tile_row(new_x + SPRITE_W - 1);
-        check_col = pixel_to_tile_col(new_y);
-        if (!tile_is_passable(map_get_tile(map, check_row, check_col))) return false;
-        check_col = pixel_to_tile_col(new_y + SPRITE_H - 1);
-        if (!tile_is_passable(map_get_tile(map, check_row, check_col))) return false;
-    } else if (dx < 0) {
-        check_row = pixel_to_tile_row(new_x);
-        check_col = pixel_to_tile_col(new_y);
-        if (!tile_is_passable(map_get_tile(map, check_row, check_col))) return false;
-        check_col = pixel_to_tile_col(new_y + SPRITE_H - 1);
-        if (!tile_is_passable(map_get_tile(map, check_row, check_col))) return false;
+void entities_round_start_step(Entity *head, TileMap *map,
+                               Player players[], int num_players)
+{
+    for (Entity *e = head; e != NULL; e = e->next) {
+        entity_move(e, map, players, num_players);
     }
+}
 
-    if (dy > 0) {
-        check_col = pixel_to_tile_col(new_y + SPRITE_H - 1);
-        check_row = pixel_to_tile_row(new_x);
-        if (!tile_is_passable(map_get_tile(map, check_row, check_col))) return false;
-        check_row = pixel_to_tile_row(new_x + SPRITE_W - 1);
-        if (!tile_is_passable(map_get_tile(map, check_row, check_col))) return false;
-    } else if (dy < 0) {
-        check_col = pixel_to_tile_col(new_y);
-        check_row = pixel_to_tile_row(new_x);
-        if (!tile_is_passable(map_get_tile(map, check_row, check_col))) return false;
-        check_row = pixel_to_tile_row(new_x + SPRITE_W - 1);
-        if (!tile_is_passable(map_get_tile(map, check_row, check_col))) return false;
+/* Tile under a monster or player: the original divides the centre
+ * coordinate (+0xEE, +0xF0) by 10. */
+static int centre_row(const Player *p)
+{
+    return pixel_to_tile_row(p->x_pos + SPRITE_W / 2);
+}
+
+static int centre_col(const Player *p)
+{
+    return pixel_to_tile_col(p->y_pos + SPRITE_H / 2);
+}
+
+void entity_deal_damage(const Entity *e, Player players[], int num_players)
+{
+    int e_row = centre_row(&e->body);
+    int e_col = centre_col(&e->body);
+
+    for (int i = 0; i < num_players; i++) {
+        /* The owner test applies to a Robot only (name compare at
+         * seg_1000:5842); +0xFD of a map monster is never set. */
+        if (entity_is_robot(e) && e->owner_player == (uint8_t)i) continue;
+
+        if (centre_row(&players[i]) == e_row &&
+            centre_col(&players[i]) == e_col && players[i].health > 0) {
+            players[i].health -= e->body.health;
+        }
     }
+}
 
-    e->x_pos = (int16_t)new_x;
-    e->y_pos = (int16_t)new_y;
-    e->prev_direction = e->direction;
-    e->anim_state = (e->anim_state + 1) % 8;
+static void move_and_face(Entity *e, TileMap *map, Player players[],
+                          int num_players, int frame_counter)
+{
+    /* Speed 6 → moves 5 of every 6 frames; speed 100 → 99 of every 100
+     * (seg_1000:5901-5903). */
+    if (e->speed_divisor > 0 && (frame_counter % e->speed_divisor) != 0) {
+        entity_move(e, map, players, num_players);
+    }
+    if (e->body.direction != DIR_STOP) {
+        e->body.last_direction = e->body.direction;
+    }
+}
 
-    return true;
+void entity_tick(Entity *e, TileMap *map, Player players[], int num_players,
+                 int frame_counter)
+{
+    if (!e || e->body.dead || !e->body.awake) return;
+    entity_deal_damage(e, players, num_players);
+    move_and_face(e, map, players, num_players, frame_counter);
+}
+
+void entities_update(Entity *head, TileMap *map,
+                     Player players[], int num_players,
+                     int frame_counter)
+{
+    for (Entity *e = head; e != NULL; e = e->next) {
+        if (e->body.dead || !e->body.awake) continue;
+        move_and_face(e, map, players, num_players, frame_counter);
+    }
+}
+
+void entities_deal_damage(Entity *head, Player players[], int num_players)
+{
+    for (Entity *e = head; e != NULL; e = e->next) {
+        if (e->body.dead || !e->body.awake) continue;
+        entity_deal_damage(e, players, num_players);
+    }
 }
 
 /*
@@ -204,14 +265,14 @@ static bool rect_all_passable(const TileMap *map, int r1, int c1, int r2, int c2
  */
 static bool check_directional_fan_activation(const Entity *e, int p_row, int p_col)
 {
-    int e_row = pixel_to_tile_row(e->x_pos);
-    int e_col = pixel_to_tile_col(e->y_pos);
+    int e_row = centre_row(&e->body);
+    int e_col = centre_col(&e->body);
 
     for (int ring = 1; ring < 8; ring++) {
         int spread = ring - 1;
         for (int offset = -spread; offset <= spread; offset++) {
             int check_row, check_col;
-            switch (e->direction) {
+            switch (e->body.direction) {
             case DIR_RIGHT: /* +row, offset on col */
                 check_row = e_row + ring;
                 check_col = e_col + offset;
@@ -239,24 +300,6 @@ static bool check_directional_fan_activation(const Entity *e, int p_row, int p_c
     return false;
 }
 
-void entities_update(Entity *head, const TileMap *map,
-                     const Player players[], int num_players,
-                     int frame_counter)
-{
-    for (Entity *e = head; e != NULL; e = e->next) {
-        if (e->dead || !e->active) continue;
-
-        /* Movement throttled by speed_divisor:
-         * Entity moves when (frame_counter % speed_divisor != 0).
-         * Speed 6 → moves 5 of every 6 frames.
-         * Speed 100 → moves 99 of every 100 frames.
-         * Decompiled ref: monster_player_collision (seg_1000:5901-5903) */
-        if (e->speed_divisor > 0 && (frame_counter % e->speed_divisor) != 0) {
-            entity_move(e, map);
-        }
-    }
-}
-
 /*
  * Activate dormant entities that detect nearby players.
  * Called every 5 frames, matching decompiled player_collision_check
@@ -276,23 +319,23 @@ void entities_activate(Entity *head, const Player players[], int num_players,
                        const TileMap *map)
 {
     for (Entity *e = head; e != NULL; e = e->next) {
-        if (e->dead || e->active) continue;
+        if (e->body.dead || e->body.awake) continue;
 
-        int e_row = pixel_to_tile_row(e->x_pos);
-        int e_col = pixel_to_tile_col(e->y_pos);
+        int e_row = centre_row(&e->body);
+        int e_col = centre_col(&e->body);
 
         for (int i = 0; i < num_players; i++) {
             if (players[i].dead) continue;
 
-            int p_row = pixel_to_tile_row(players[i].x_pos + SPRITE_W / 2);
-            int p_col = pixel_to_tile_col(players[i].y_pos + SPRITE_H / 2);
+            int p_row = centre_row(&players[i]);
+            int p_col = centre_col(&players[i]);
 
             bool activated = false;
 
             /* Method 1: same-tile proximity (< 20px on both axes)
              * Decompiled ref: seg_1000:4766-4781 */
-            int dx = abs(e->x_pos - players[i].x_pos);
-            int dy = abs(e->y_pos - players[i].y_pos);
+            int dx = abs(e->body.x_pos - players[i].x_pos);
+            int dy = abs(e->body.y_pos - players[i].y_pos);
             if (dx < ENTITY_ACTIVATION_DIST && dy < ENTITY_ACTIVATION_DIST) {
                 activated = true;
             }
@@ -321,49 +364,9 @@ void entities_activate(Entity *head, const Player players[], int num_players,
             }
 
             if (activated) {
-                e->active = 1;
+                e->body.awake = 1;
                 sfx_play(SFX_KARJAISU);
                 break;  /* only activate once */
-            }
-        }
-    }
-}
-
-/*
- * Deal damage from active entities to players sharing the same tile.
- * Called EVERY FRAME, matching decompiled monster_player_collision
- * (seg_1000:5803-5900, called at main loop line 7261 outside any
- * frame-counter modulo check).
- *
- * Uses exact tile matching (entity tile == player tile), NOT pixel
- * proximity. Decompiled ref:
- *   entity_row = offset_0xEE / 10   (seg_1000:5834)
- *   entity_col = (offset_0xF0 - 0x1E) / 10  (seg_1000:5835)
- *   player matches when player_row == entity_row AND player_col == entity_col
- *   (seg_1000:5839-5840)
- *
- * Owner check: entity offset 0xFD (owner_player) prevents friendly fire
- * (seg_1000:5843/5859/5875/5891).
- */
-void entities_deal_damage(Entity *head, Player players[], int num_players)
-{
-    for (Entity *e = head; e != NULL; e = e->next) {
-        if (e->dead || !e->active) continue;
-
-        /* Both entity and player use raw position / 10 for tile matching,
-         * matching decompiled: offset_0xEE / 10 for both (seg_1000:5834,5839) */
-        int e_row = pixel_to_tile_row(e->x_pos);
-        int e_col = pixel_to_tile_col(e->y_pos);
-
-        for (int i = 0; i < num_players; i++) {
-            if (players[i].dead) continue;
-            if (e->owner_player == (uint8_t)i) continue;
-
-            int p_row = pixel_to_tile_row(players[i].x_pos);
-            int p_col = pixel_to_tile_col(players[i].y_pos);
-
-            if (p_row == e_row && p_col == e_col && players[i].health > 0) {
-                players[i].health -= e->attack_power;
             }
         }
     }
@@ -391,7 +394,10 @@ int entities_allocated_count(void)
 void entity_list_add(Entity **head_ptr, Entity *e)
 {
     if (!head_ptr || !e) return;
-    e->next = *head_ptr;
+    e->next = NULL;
+    while (*head_ptr) {
+        head_ptr = &(*head_ptr)->next;
+    }
     *head_ptr = e;
 }
 
@@ -399,7 +405,7 @@ int entities_count_alive(const Entity *head)
 {
     int count = 0;
     for (const Entity *e = head; e != NULL; e = e->next) {
-        if (!e->dead) count++;
+        if (!e->body.dead) count++;
     }
     return count;
 }

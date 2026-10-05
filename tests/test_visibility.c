@@ -166,6 +166,86 @@ void test_visibility_tile_blocks_los(void)
     TEST_ASSERT_TRUE(visibility_tile_blocks_los('B'));
     TEST_ASSERT_TRUE(visibility_tile_blocks_los(0xAC));
     TEST_ASSERT_TRUE(visibility_tile_blocks_los('l'));
+
+    /* The set at seg_1000:4A31: sand, monsters, fire and the two gaps in
+     * the pickup range stop a ray; bombs and treasures do not. */
+    TEST_ASSERT_TRUE(visibility_tile_blocks_los('2'));
+    TEST_ASSERT_TRUE(visibility_tile_blocks_los('3'));
+    TEST_ASSERT_TRUE(visibility_tile_blocks_los('4'));
+    TEST_ASSERT_TRUE(visibility_tile_blocks_los('G'));
+    TEST_ASSERT_TRUE(visibility_tile_blocks_los(0x84));
+    TEST_ASSERT_TRUE(visibility_tile_blocks_los(0x9B));
+    TEST_ASSERT_TRUE(visibility_tile_blocks_los(0xA4));
+    TEST_ASSERT_FALSE(visibility_tile_blocks_los('W'));
+    TEST_ASSERT_FALSE(visibility_tile_blocks_los(0x8A));
+    TEST_ASSERT_FALSE(visibility_tile_blocks_los(0xB5));
+}
+
+/* Helper: a map of solid wall with the listed tiles opened to floor */
+static void init_wall_map(TileMap *map, const int (*floor)[2], int count)
+{
+    memset(map, 0, sizeof(TileMap));
+    memset(map->tiles, '1', sizeof(map->tiles));
+    for (int i = 0; i < count; i++)
+        map->tiles[floor[i][0]][floor[i][1]] = '0';
+}
+
+/* Test: sand is revealed by the ray that hits it and hides what is behind */
+void test_visibility_sand_stops_the_ray(void)
+{
+    static const int corridor[][2] = {
+        {32, 22}, {33, 22}, {34, 22}, {35, 22}, {36, 22}, {37, 22},
+    };
+    TileMap map;
+    init_wall_map(&map, corridor, 6);
+    map.tiles[35][22] = '2';
+    visibility_init(&map);
+
+    Player p = make_player(22, 32, DIR_RIGHT);
+    visibility_reveal_player(&map, &p);
+
+    TEST_ASSERT_TRUE(visibility_is_revealed(&map, 34, 22));
+    TEST_ASSERT_TRUE(visibility_is_revealed(&map, 35, 22));
+    TEST_ASSERT_FALSE(visibility_is_revealed(&map, 36, 22));
+}
+
+/* Test: the line walk of FUN_1000_4a51. Toward a target 20 tiles ahead
+ * and 10 to the side the numerator starts at 10, so the steps alternate
+ * diagonal, straight, diagonal, straight. */
+void test_visibility_ray_follows_the_original_line_walk(void)
+{
+    static const int path[][2] = {
+        {32, 22}, {33, 21}, {34, 21}, {35, 20}, {36, 20}, {37, 19},
+    };
+    TileMap map;
+    init_wall_map(&map, path, 6);
+    visibility_init(&map);
+
+    Player p = make_player(22, 32, DIR_RIGHT);
+    visibility_reveal_player(&map, &p);
+
+    TEST_ASSERT_TRUE(visibility_is_revealed(&map, 37, 19));
+    TEST_ASSERT_TRUE_MESSAGE(visibility_is_revealed(&map, 38, 19),
+        "The wall that ends the path is revealed");
+    TEST_ASSERT_FALSE(visibility_is_revealed(&map, 39, 19));
+    TEST_ASSERT_FALSE(visibility_is_revealed(&map, 39, 18));
+}
+
+/* Test: ray targets past the far map edge are not pulled back onto it,
+ * so the fan keeps its 45-degree sides next to the edge */
+void test_visibility_fan_keeps_its_angle_at_the_far_edge(void)
+{
+    TileMap map;
+    init_floor_map(&map);
+    visibility_init(&map);
+
+    Player p = make_player(22, 55, DIR_RIGHT);
+    visibility_reveal_player(&map, &p);
+
+    TEST_ASSERT_TRUE(visibility_is_revealed(&map, 62, 15));
+    TEST_ASSERT_TRUE(visibility_is_revealed(&map, 62, 29));
+    TEST_ASSERT_FALSE(visibility_is_revealed(&map, 62, 6));
+    TEST_ASSERT_FALSE(visibility_is_revealed(&map, 62, 38));
 }
 
 /* Test: out-of-bounds tile access returns not revealed */
@@ -301,6 +381,9 @@ int main(void)
     RUN_TEST(test_visibility_rays_extend_in_facing_direction);
     RUN_TEST(test_visibility_walls_block_los);
     RUN_TEST(test_visibility_tile_blocks_los);
+    RUN_TEST(test_visibility_sand_stops_the_ray);
+    RUN_TEST(test_visibility_ray_follows_the_original_line_walk);
+    RUN_TEST(test_visibility_fan_keeps_its_angle_at_the_far_edge);
     RUN_TEST(test_visibility_out_of_bounds);
     RUN_TEST(test_visibility_dead_player_no_reveal);
     RUN_TEST(test_visibility_stopped_player_no_reveal);

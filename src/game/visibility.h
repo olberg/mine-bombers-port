@@ -55,8 +55,10 @@ bool visibility_is_revealed(const TileMap *map, int row, int col);
 /* Reveal a single tile (clear layer4 bit 0). */
 void visibility_reveal_tile(TileMap *map, int row, int col);
 
-/* Check if tile blocks line-of-sight for visibility rays.
- * Walls and solid objects block; floor, decorations, pickups don't. */
+/* Check if tile blocks line-of-sight for visibility rays: everything
+ * outside the original's see-through set (seg_1000:4A31). Floor and most
+ * things lying on it let a ray pass; sand, stone, walls, monsters and
+ * fire stop it. */
 bool visibility_tile_blocks_los(uint8_t tile);
 
 #endif

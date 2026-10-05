@@ -65,6 +65,9 @@ void player_init_defaults(Player *p, int player_num)
     p->bonus_stat = 0;
     p->dead = 0;
     p->active = 1;
+    p->has_stats = 1;
+    p->awake = 0;
+    p->reached_exit = 0;
     p->kills = 0;
     p->round_wins = 0;
 
@@ -117,6 +120,7 @@ void player_reset_for_round(Player *p)
 {
     p->dead = 0;
     p->active = 1;
+    p->reached_exit = 0;
     p->direction = DIR_STOP;
     p->anim_frame = 0;
     p->digging = 0;

@@ -120,23 +120,69 @@ void test_round_end_time(void)
 /* Single-player exit tile check */
 void test_single_player_exit_tile(void)
 {
-    TileMap map;
-    setup_test_map(&map);
+    /* The exit is never stood on: player 1 pushes into it from the tile
+     * before, and the round ends on that frame (seg_1000:3637-3642,
+     * 7268-7271). */
+    Round r;
+    memset(&r, 0, sizeof(Round));
+    setup_test_map(&r.map);
+    r.state = ROUND_RUNNING;
+    r.time_remaining = -1;
+    r.time_total = -1;
+    r.single_player = true;
+    r.map.tiles[6][5] = 'k';
 
-    Player p;
-    player_init_defaults(&p, 0);
+    player_init_defaults(&g_players[0], 0);
+    g_players[0].x_pos = tile_to_pixel_x(5);
+    g_players[0].y_pos = tile_to_pixel_y(5);
 
-    /* Place exit tile at (5, 5) */
-    map.tiles[5][5] = 'k';
-    p.x_pos = tile_to_pixel_x(5);
-    p.y_pos = tile_to_pixel_y(5);
+    /* Standing next to the exit is not enough */
+    round_update(&r, g_players, 1);
+    TEST_ASSERT_EQUAL_INT(ROUND_RUNNING, r.state);
 
-    TEST_ASSERT_TRUE(round_check_exit_tile(&p, &map));
+    g_players[0].direction = DIR_RIGHT;
+    round_update(&r, g_players, 1);
+    TEST_ASSERT_EQUAL_INT(ROUND_END_EXIT, r.end_reason);
+    TEST_ASSERT_EQUAL_INT(ROUND_FADE_OUT, r.state);
+    TEST_ASSERT_EQUAL_INT16(tile_to_pixel_x(5), g_players[0].x_pos);
+}
 
-    /* Move player away */
-    p.x_pos = tile_to_pixel_x(10);
-    p.y_pos = tile_to_pixel_y(10);
-    TEST_ASSERT_FALSE(round_check_exit_tile(&p, &map));
+/* With the lights on every monster gets one call of the movement routine
+ * before the fade-in; in the dark none does (seg_1000:7131-7134). */
+void test_round_start_steps_monsters_only_with_lights_on(void)
+{
+    for (int dark = 0; dark < 2; dark++) {
+        Round r;
+        memset(&r, 0, sizeof(Round));
+        setup_test_map(&r.map);
+        r.state = ROUND_FADE_IN;
+        r.time_remaining = -1;
+        r.time_total = -1;
+        r.darkness_enabled = (dark != 0);
+        r.map.darkness_enabled = (dark != 0);
+        r.map.tiles[21][10] = 0x95;         /* coin in front of the monster */
+
+        Entity *e = entity_spawn('G', 10, 20);
+        entity_list_add(&r.entity_head, e);
+
+        Player players[2];
+        player_init_defaults(&players[0], 0);
+        player_init_defaults(&players[1], 1);
+        players[0].x_pos = tile_to_pixel_x(50);
+        players[0].y_pos = tile_to_pixel_y(40);
+        players[1].x_pos = tile_to_pixel_x(55);
+        players[1].y_pos = tile_to_pixel_y(40);
+
+        round_update(&r, players, 2);
+        TEST_ASSERT_EQUAL_UINT8(dark ? 0x95 : '0', r.map.tiles[21][10]);
+
+        /* Only once: the rest of the fade-in leaves the monster alone */
+        int16_t x = e->body.x_pos;
+        round_update(&r, players, 2);
+        TEST_ASSERT_EQUAL_INT16(x, e->body.x_pos);
+
+        entities_cleanup(&r.entity_head);
+    }
 }
 
 /* ---- round_apply_scoring characterization (FUN_1000_a17c) ----
@@ -972,6 +1018,7 @@ int main(void)
     RUN_TEST(test_inactivity_threshold_boundary);
     RUN_TEST(test_round_end_time);
     RUN_TEST(test_single_player_exit_tile);
+    RUN_TEST(test_round_start_steps_monsters_only_with_lights_on);
     RUN_TEST(test_scoring_cash_floor);
     RUN_TEST(test_scoring_pools_earned_not_cash);
     RUN_TEST(test_scoring_sole_survivor_treasure_bonus);

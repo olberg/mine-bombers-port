@@ -100,8 +100,8 @@ void test_move_toward(void)
     setup_test_map(&map);
 
     Entity *e = entity_spawn('G', 10, 20);
-    e->active = 1;
-    e->direction = DIR_STOP;
+    e->body.awake = 1;
+    e->body.direction = DIR_STOP;
 
     mb_prng_set_seed(999u);  /* seed to avoid 3% random swap on this test */
 
@@ -109,7 +109,7 @@ void test_move_toward(void)
     ai_move_toward(e, 20, 30, &map);
 
     /* Should pick down (larger delta: 10 rows vs 10 cols, might pick either) */
-    TEST_ASSERT_TRUE(e->direction == DIR_RIGHT || e->direction == DIR_DOWN);
+    TEST_ASSERT_TRUE(e->body.direction == DIR_RIGHT || e->body.direction == DIR_DOWN);
 
     free(e);
 }
@@ -121,18 +121,18 @@ void test_move_toward_x_axis(void)
     setup_test_map(&map);
 
     Entity *e = entity_spawn('G', 5, 20);
-    e->active = 1;
+    e->body.awake = 1;
 
     /* Compute entity's actual tile position (spawn adds +5 pixel offset) */
-    int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-    int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+    int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+    int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
 
     mb_prng_set_seed(999u);
 
     /* Target far to the right (higher row), same col (no col delta) */
     ai_move_toward(e, ecol, erow + 25, &map);
 
-    TEST_ASSERT_EQUAL_UINT8(DIR_RIGHT, e->direction);
+    TEST_ASSERT_EQUAL_UINT8(DIR_RIGHT, e->body.direction);
 
     free(e);
 }
@@ -144,16 +144,16 @@ void test_move_away(void)
     setup_test_map(&map);
 
     Entity *e = entity_spawn('G', 20, 30);
-    e->active = 1;
+    e->body.awake = 1;
 
     /* Threat is to the left (lower row, same col).
      * Entity at row≈31, col≈21. Threat at same col, much lower row. */
-    int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-    int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+    int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+    int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
     ai_move_away(e, ecol, erow - 10, &map);
 
     /* Should move right (away from left threat) */
-    TEST_ASSERT_EQUAL_UINT8(DIR_RIGHT, e->direction);
+    TEST_ASSERT_EQUAL_UINT8(DIR_RIGHT, e->body.direction);
 
     free(e);
 }
@@ -166,11 +166,11 @@ void test_blocked_random(void)
 
     /* Box the entity in with walls */
     Entity *e = entity_spawn('G', 5, 5);
-    e->active = 1;
+    e->body.awake = 1;
 
     /* Surround with walls */
-    int erow = pixel_to_tile_row(e->x_pos);
-    int ecol = pixel_to_tile_col(e->y_pos);
+    int erow = pixel_to_tile_row(e->body.x_pos);
+    int ecol = pixel_to_tile_col(e->body.y_pos);
     if (ecol > 0) map.tiles[erow][ecol - 1] = '1';
     if (ecol < MAP_COLS - 1) map.tiles[erow][ecol + 1] = '1';
     if (erow > 0) map.tiles[erow - 1][ecol] = '1';
@@ -180,7 +180,7 @@ void test_blocked_random(void)
     ai_move_away(e, 0, 0, &map);
 
     /* Just verify it set a direction (won't crash) */
-    TEST_ASSERT_TRUE(e->direction >= 1 && e->direction <= 4);
+    TEST_ASSERT_TRUE(e->body.direction >= 1 && e->body.direction <= 4);
 
     free(e);
 }
@@ -192,16 +192,78 @@ void test_ai_is_blocked(void)
     setup_test_map(&map);
 
     Entity *e = entity_spawn('G', 5, 5);
-    e->active = 1;
-    e->direction = DIR_RIGHT;
+    e->body.awake = 1;
+    e->body.direction = DIR_RIGHT;
 
     /* Place wall directly to the right (RIGHT = row+1 in VGA convention) */
-    int erow = pixel_to_tile_row(e->x_pos + SPRITE_W);
-    int ecol = pixel_to_tile_col(e->y_pos);
-    e->x_pos = (int16_t)(erow * TILE_SIZE - SPRITE_W);
+    int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W);
+    int ecol = pixel_to_tile_col(e->body.y_pos);
+    e->body.x_pos = (int16_t)(erow * TILE_SIZE - SPRITE_W);
     if (erow < MAP_ROWS) map.tiles[erow][ecol] = '1';
 
     TEST_ASSERT_TRUE(ai_is_blocked(e, &map));
+
+    free(e);
+}
+
+/* --- Test: sand and treasure ahead do not count as blocked: the monster
+ * digs through the one and takes the other (FUN_1000_83a2) --- */
+void test_ai_blocked_ignores_sand_and_treasure(void)
+{
+    TileMap map;
+    setup_test_map(&map);
+
+    Entity *e = entity_spawn('G', 10, 20);   /* faces (row 21, col 10) */
+    e->body.awake = 1;
+
+    static const uint8_t open_ahead[] = { '2', '3', '4', 0x73, 0x92, 0x9A, 'f', 0xAF };
+    for (int i = 0; i < (int)sizeof(open_ahead); i++) {
+        map.tiles[21][10] = open_ahead[i];
+        TEST_ASSERT_FALSE(ai_is_blocked(e, &map));
+    }
+
+    static const uint8_t blocking[] = { '1', '5', 'C', 0x79, 0x8F, 'm' };
+    for (int i = 0; i < (int)sizeof(blocking); i++) {
+        map.tiles[21][10] = blocking[i];
+        TEST_ASSERT_TRUE(ai_is_blocked(e, &map));
+    }
+
+    /* A stopped monster is not blocked */
+    e->body.direction = DIR_STOP;
+    TEST_ASSERT_FALSE(ai_is_blocked(e, &map));
+
+    free(e);
+}
+
+/* --- Test: the random turn runs on its own frames, also when they are
+ * not decision frames --- */
+void test_ai_random_turn_every_121_frames(void)
+{
+    TileMap map;
+    setup_test_map(&map);
+    Player players[1];
+    player_init_defaults(&players[0], 0);
+    players[0].x_pos = (int16_t)tile_to_pixel_x(60);
+    players[0].y_pos = (int16_t)tile_to_pixel_y(40);
+
+    Entity *e = entity_spawn('G', 10, 20);
+    e->body.awake = 1;
+
+    /* 121 is not a multiple of 26; over many seeds the direction changes */
+    int changed = 0;
+    for (unsigned seed = 1; seed <= 20; seed++) {
+        mb_prng_set_seed(seed);
+        e->body.direction = DIR_RIGHT;
+        ai_update(e, &map, players, 1, 121, e, 0);
+        if (e->body.direction != DIR_RIGHT) changed++;
+        TEST_ASSERT_TRUE(e->body.direction >= DIR_RIGHT && e->body.direction <= DIR_DOWN);
+    }
+    TEST_ASSERT_TRUE(changed > 0);
+
+    /* An ordinary frame leaves the direction alone */
+    e->body.direction = DIR_RIGHT;
+    ai_update(e, &map, players, 1, 7, e, 0);
+    TEST_ASSERT_EQUAL_UINT8(DIR_RIGHT, e->body.direction);
 
     free(e);
 }
@@ -213,8 +275,8 @@ void test_ai_not_blocked(void)
     setup_test_map(&map);
 
     Entity *e = entity_spawn('G', 10, 20);
-    e->active = 1;
-    e->direction = DIR_RIGHT;
+    e->body.awake = 1;
+    e->body.direction = DIR_RIGHT;
 
     TEST_ASSERT_FALSE(ai_is_blocked(e, &map));
 
@@ -243,7 +305,7 @@ void test_ai_update_smoke(void)
     setup_test_map(&map);
 
     Entity *e = entity_spawn('K', 10, 20);
-    e->active = 1;
+    e->body.awake = 1;
 
     Player players[2];
     player_init_defaults(&players[0], 0);
@@ -259,7 +321,7 @@ void test_ai_update_smoke(void)
     }
 
     /* Just verify we survived */
-    TEST_ASSERT_EQUAL_UINT8(0, e->dead);
+    TEST_ASSERT_EQUAL_UINT8(0, e->body.dead);
 
     free(e);
 }
@@ -272,18 +334,18 @@ void test_entity_place_bomb_same_col(void)
 
     /* Entity at tile (10, 20) facing down */
     Entity *e = entity_spawn('G', 10, 20);
-    e->active = 1;
-    e->direction = DIR_DOWN;
+    e->body.awake = 1;
+    e->body.direction = DIR_DOWN;
     e->owner_player = 0xFF; /* no owner (map-spawned) */
 
-    int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-    int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+    int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+    int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
 
     /* Place player in same column but different row (XOR: same_col=true, same_row=false) */
     Player players[1];
     player_init_defaults(&players[0], 0);
-    players[0].x_pos = e->x_pos;             /* same column */
-    players[0].y_pos = e->y_pos + 80;        /* 8 tiles below */
+    players[0].x_pos = e->body.x_pos;             /* same column */
+    players[0].y_pos = e->body.y_pos + 80;        /* 8 tiles below */
 
     ai_entity_place_bomb(e, &map, players, 1, e);
 
@@ -301,18 +363,18 @@ void test_entity_no_bomb_same_tile(void)
     setup_test_map(&map);
 
     Entity *e = entity_spawn('G', 10, 20);
-    e->active = 1;
-    e->direction = DIR_DOWN;
+    e->body.awake = 1;
+    e->body.direction = DIR_DOWN;
     e->owner_player = 0xFF;
 
-    int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-    int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+    int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+    int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
 
     /* Place player on exact same tile (both axes match: XOR = false) */
     Player players[1];
     player_init_defaults(&players[0], 0);
-    players[0].x_pos = e->x_pos;
-    players[0].y_pos = e->y_pos;
+    players[0].x_pos = e->body.x_pos;
+    players[0].y_pos = e->body.y_pos;
 
     ai_entity_place_bomb(e, &map, players, 1, e);
 
@@ -329,18 +391,18 @@ void test_entity_no_bomb_diagonal(void)
     setup_test_map(&map);
 
     Entity *e = entity_spawn('G', 10, 20);
-    e->active = 1;
-    e->direction = DIR_RIGHT;
+    e->body.awake = 1;
+    e->body.direction = DIR_RIGHT;
     e->owner_player = 0xFF;
 
-    int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-    int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+    int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+    int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
 
     /* Place player diagonally (neither axis matches: XOR = false) */
     Player players[1];
     player_init_defaults(&players[0], 0);
-    players[0].x_pos = e->x_pos + 50;
-    players[0].y_pos = e->y_pos + 50;
+    players[0].x_pos = e->body.x_pos + 50;
+    players[0].y_pos = e->body.y_pos + 50;
 
     ai_entity_place_bomb(e, &map, players, 1, e);
 
@@ -358,24 +420,24 @@ void test_entity_no_bomb_ally_in_path(void)
 
     /* Entity facing down */
     Entity *e1 = entity_spawn('G', 10, 20);
-    e1->active = 1;
-    e1->direction = DIR_DOWN;
+    e1->body.awake = 1;
+    e1->body.direction = DIR_DOWN;
     e1->owner_player = 0xFF;
 
-    int ecol = pixel_to_tile_col(e1->x_pos + SPRITE_W / 2);
-    int erow = pixel_to_tile_row(e1->y_pos + SPRITE_H / 2);
+    int ecol = pixel_to_tile_col(e1->body.x_pos + SPRITE_W / 2);
+    int erow = pixel_to_tile_row(e1->body.y_pos + SPRITE_H / 2);
 
     /* Another entity 2 tiles below (in blast path) */
     Entity *e2 = entity_spawn('G', 10, 22);
-    e2->active = 1;
+    e2->body.awake = 1;
     e2->owner_player = 0xFF;
     e1->next = e2;
 
     /* Player in same column, far enough below */
     Player players[1];
     player_init_defaults(&players[0], 0);
-    players[0].x_pos = e1->x_pos;
-    players[0].y_pos = e1->y_pos + 100;
+    players[0].x_pos = e1->body.x_pos;
+    players[0].y_pos = e1->body.y_pos + 100;
 
     ai_entity_place_bomb(e1, &map, players, 1, e1);
 
@@ -404,16 +466,16 @@ void test_entity_bomb_direction(void)
         setup_test_map(&map);
 
         Entity *e = entity_spawn('G', 10, 20);
-        e->active = 1;
-        e->direction = cases[i].dir;
+        e->body.awake = 1;
+        e->body.direction = cases[i].dir;
         e->owner_player = 0xFF;
 
-        int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-        int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+        int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+        int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
 
         /* Player in different row, same column (XOR passes) */
-        players[0].x_pos = e->x_pos + 80;
-        players[0].y_pos = e->y_pos;
+        players[0].x_pos = e->body.x_pos + 80;
+        players[0].y_pos = e->body.y_pos;
 
         ai_entity_place_bomb(e, &map, players, 1, e);
 
@@ -431,8 +493,8 @@ void test_ai_enemy_skips_hazard(void)
     setup_test_map(&map);
 
     Entity *e = entity_spawn('G', 20, 20);
-    e->active = 1;
-    e->direction = DIR_RIGHT;
+    e->body.awake = 1;
+    e->body.direction = DIR_RIGHT;
     e->owner_player = 0; /* owned by player 0 */
 
     Player players[2];
@@ -444,8 +506,8 @@ void test_ai_enemy_skips_hazard(void)
     players[0].y_pos = 400;
 
     /* Player 1 (enemy) nearby — 3 tiles to the right (row+3) */
-    int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-    int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+    int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+    int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
     players[1].x_pos = (int16_t)((erow + 3) * TILE_SIZE);
     players[1].y_pos = (int16_t)(ecol * TILE_SIZE + MAP_Y_OFFSET);
 
@@ -456,7 +518,7 @@ void test_ai_enemy_skips_hazard(void)
     ai_update(e, &map, players, 2, 26, e, 10);
 
     /* Entity should move toward the enemy (RIGHT), not away from hazard */
-    TEST_ASSERT_EQUAL_UINT8(DIR_RIGHT, e->direction);
+    TEST_ASSERT_EQUAL_UINT8(DIR_RIGHT, e->body.direction);
 
     free(e);
 }
@@ -468,16 +530,16 @@ void test_ai_owner_found_checks_hazard(void)
     setup_test_map(&map);
 
     Entity *e = entity_spawn('G', 20, 20);
-    e->active = 1;
-    e->direction = DIR_RIGHT;
+    e->body.awake = 1;
+    e->body.direction = DIR_RIGHT;
     e->owner_player = 0; /* owned by player 0 */
 
     Player players[1];
     player_init_defaults(&players[0], 0);
 
     /* Player 0 (owner) nearby — 3 tiles to the right */
-    int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-    int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+    int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+    int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
     players[0].x_pos = (int16_t)((erow + 3) * TILE_SIZE);
     players[0].y_pos = (int16_t)(ecol * TILE_SIZE + MAP_Y_OFFSET);
 
@@ -488,7 +550,7 @@ void test_ai_owner_found_checks_hazard(void)
     ai_update(e, &map, players, 1, 26, e, 10);
 
     /* Entity should flee away from the hazard (LEFT = away from row+1) */
-    TEST_ASSERT_EQUAL_UINT8(DIR_LEFT, e->direction);
+    TEST_ASSERT_EQUAL_UINT8(DIR_LEFT, e->body.direction);
 
     free(e);
 }
@@ -500,8 +562,8 @@ void test_ai_no_treasures_skips_hazard(void)
     setup_test_map(&map);
 
     Entity *e = entity_spawn('G', 20, 20);
-    e->active = 1;
-    e->direction = DIR_RIGHT;
+    e->body.awake = 1;
+    e->body.direction = DIR_RIGHT;
     e->owner_player = 0xFF; /* no owner */
 
     Player players[1];
@@ -511,8 +573,8 @@ void test_ai_no_treasures_skips_hazard(void)
     players[0].dead = 1; /* no alive players */
 
     /* Place a hazard very close */
-    int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-    int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+    int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+    int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
     map.tiles[erow + 1][ecol] = 0x93;
 
     /* treasure_count == 0 → hazard search should be skipped */
@@ -522,7 +584,7 @@ void test_ai_no_treasures_skips_hazard(void)
     /* The entity should try to place a bomb instead (but will fail safety checks).
      * Key assertion: direction should NOT be DIR_LEFT (flee direction) */
     /* Since no player found, no enemy, and no treasures: falls to bomb placement path */
-    TEST_ASSERT_TRUE(e->direction != DIR_STOP);
+    TEST_ASSERT_TRUE(e->body.direction != DIR_STOP);
 
     free(e);
 }
@@ -561,6 +623,8 @@ int main(void)
     RUN_TEST(test_blocked_random);
     RUN_TEST(test_ai_is_blocked);
     RUN_TEST(test_ai_not_blocked);
+    RUN_TEST(test_ai_blocked_ignores_sand_and_treasure);
+    RUN_TEST(test_ai_random_turn_every_121_frames);
     RUN_TEST(test_find_hazard);
     RUN_TEST(test_ai_update_smoke);
     RUN_TEST(test_entity_place_bomb_same_col);

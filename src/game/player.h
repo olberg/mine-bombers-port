@@ -88,6 +88,15 @@ typedef struct {
     int16_t  bonus_stat;        /* bonus accumulator (offset 0xAC in original) */
     uint8_t  dead;              /* 0=alive, 1=dead */
     uint8_t  active;            /* collision/active flag */
+    /* The original puts monsters in this same struct (see entity.h) and
+     * its shared routines tell the two apart by these fields only. */
+    uint8_t  has_stats;         /* +0xFF match-stats pointer is set: 1 for
+                                   players, 0 for monsters */
+    uint8_t  awake;             /* +0x103: a monster that has noticed a
+                                   player; always 0 for players */
+    uint8_t  reached_exit;      /* pushed into the exit tile 'k' with player
+                                   1's name (g_sp_win_condition,
+                                   seg_1000:3637-3642); reset per round */
     int16_t  kills;
     int16_t  round_wins;
 

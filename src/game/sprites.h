@@ -34,6 +34,10 @@ Rectangle sprites_get_tile_rect(uint8_t tile_byte);
 /* Draw a tile sprite at the given native-resolution position. */
 void sprites_draw_tile(uint8_t tile_byte, int x, int y);
 
+/* Draw an arbitrary w x h rectangle of the sheet at the given position,
+ * copying every pixel (colour index 0 comes out black, not transparent). */
+void sprites_draw_region(int src_x, int src_y, int w, int h, int x, int y);
+
 /* Get the atlas texture (for batch drawing). */
 Texture2D sprites_get_atlas(void);
 

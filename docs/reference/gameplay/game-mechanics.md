@@ -37,12 +37,18 @@ Bounds check: if row >= 64 or col >= 45, returns 0x30 (empty floor).
 | 'f' | 0x66 | Death marker / corpse |
 | — | 0xAF | Floor variant |
 
+These are the only tiles a player or a monster can step into (seg_1000:3898-4059). Everything else is dug, pushed or taken from the tile before it; see [Treasures & Pickups](#treasures-pickups).
+
 ### Indestructible Walls
 | Value | Hex | Description |
 |-------|-----|-------------|
 | '1' | 0x31 | Solid wall type 1 |
-| '2'-'4' | 0x32-0x34 | Solid wall variants |
 | '5' | 0x35 | Damaged wall visual (indestructible remnant) |
+
+### Sand
+| Value | Hex | Description |
+|-------|-----|-------------|
+| '2'-'4' | 0x32-0x34 | Sand, collision HP 22 / 23 / 24. Dug away by players and monsters; stops a vision ray |
 
 ### Destructible Walls (collision HP applies)
 | Value | Hex | HP Thresholds |
@@ -79,10 +85,12 @@ Bounds check: if row >= 64 or col >= 45, returns 0x30 (empty floor).
 | 0xB3 | — | +1 extra life (single-player) |
 | 'y' (0x79) | — | Mystery box (random weapon drop) |
 
+A pickup is never walked onto. A mover standing at a tile centre and pushing into the pickup's tile runs the pickup handler, which turns the tile into floor; the step into it happens on the next frame. Monsters go through the same routine and take pickups the same way (see [AI & Monster Behavior](../ai/ai-behavior.md)).
+
 ### Interaction Tiles
 | Value | Hex | Effect |
 |-------|-----|--------|
-| 'k' (0x6B) | — | Exit door (single-player win) |
+| 'k' (0x6B) | — | Exit door (single-player win). Pushed into, never entered, and the tile stays. It counts only when the mover's name equals player 1's (seg_1000:3637-3642) |
 | 0x9C | — | Teleporter (random warp between all 0x9C tiles) |
 | 0xB4, 0xB5 | — | Shop tiles |
 
@@ -115,7 +123,7 @@ Bounds check: if row >= 64 or col >= 45, returns 0x30 (empty floor).
 | 0xA5 | — | 0xBC | 1 | Directional arrow (immediate, direction-encoded) |
 | 0xA9 | — | 0xD0 | 1 | Teleporter bomb (immediate) |
 | 0x9C | — | 0xD8 | — | Weapon variant |
-| 'n' (0x6E) | — | 0xDA | — | Creature spawner |
+| 'n' (0x6E) | — | 0xDA | — | Robot: spawns a monster that spares its owner and collects for them (see [AI & Monster Behavior](../ai/ai-behavior.md#the-robot)) |
 | 'o' (0x6F) | — | 0xDC | random 0-80 | Proximity mine |
 | 0xAB | — | 0xE2 | random 80-160 | Random-fuse bomb |
 
@@ -239,6 +247,7 @@ digging-power fields.
 | Double-speed movement | Every frame | If player has speed bonus |
 | Input, weapons & death check | Every 2 frames | `frame_counter % 2 == 0` |
 | Monster contact damage | Every frame | Same-tile check, no modulo gate |
+| Monster movement | Every frame | `frame_counter % speed_divisor != 0` |
 | Monster activation + round-end checks | Every 5 frames | `frame_counter % 5 == 0` |
 | Super-drill loan counter | Every 18 frames | `frame_counter % 18 == 0` |
 | Treasures-gone check | Every 20 frames | `frame_counter % 20 == 0` |
@@ -255,7 +264,7 @@ digging-power fields.
 ## Win/Lose Conditions
 
 ### Single-Player
-- **Win**: reach exit tile 'k' (0x6B). Only one 'k' tile exists per level (extras randomly cleared at level load).
+- **Win**: push into the exit tile 'k' (0x6B) from the tile before it; the round ends on that frame (seg_1000:7268-7271). Only one 'k' tile exists per level (extras randomly cleared at level load).
 - **Lose**: health ≤ 0 → lose 1 life, retry level. 0 lives → game over.
 - **15 levels** total. Complete all = game complete screen + hall of fame.
 

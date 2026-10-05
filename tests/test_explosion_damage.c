@@ -158,19 +158,18 @@ void test_entity_takes_explosion_damage(void)
     Entity e;
     memset(&e, 0, sizeof(e));
     e.type = ENTITY_TYPE_1;
-    e.health = 100;
-    e.max_health = 100;
-    e.x_pos = tile_to_pixel_x(5);
-    e.y_pos = tile_to_pixel_y(5);
-    e.dead = 0;
+    e.body.max_health = 100;
+    e.body.x_pos = tile_to_pixel_x(5);
+    e.body.y_pos = tile_to_pixel_y(5);
+    e.body.dead = 0;
     e.next = NULL;
 
     bombs_set_entity_list(&e);
 
     bool found = bombs_check_player_damage(&map, 5, 5, 60);
     TEST_ASSERT_TRUE(found);
-    TEST_ASSERT_EQUAL_INT(40, e.health);  /* 100 - 60 */
-    TEST_ASSERT_EQUAL_INT(0, e.dead);     /* still alive */
+    TEST_ASSERT_EQUAL_INT(40, e.body.max_health);  /* 100 - 60 */
+    TEST_ASSERT_EQUAL_INT(0, e.body.dead);     /* still alive */
 }
 
 /* Entity killed by explosion, death tile placed */
@@ -185,17 +184,16 @@ void test_entity_killed_by_explosion(void)
     Entity e;
     memset(&e, 0, sizeof(e));
     e.type = ENTITY_TYPE_1;
-    e.health = 50;
-    e.max_health = 100;
-    e.x_pos = tile_to_pixel_x(5);
-    e.y_pos = tile_to_pixel_y(5);
-    e.dead = 0;
+    e.body.max_health = 50;
+    e.body.x_pos = tile_to_pixel_x(5);
+    e.body.y_pos = tile_to_pixel_y(5);
+    e.body.dead = 0;
     e.next = NULL;
 
     bombs_set_entity_list(&e);
 
     bombs_check_player_damage(&map, 5, 5, 0xFF);
-    TEST_ASSERT_EQUAL_INT(1, e.dead);
+    TEST_ASSERT_EQUAL_INT(1, e.body.dead);
     TEST_ASSERT_EQUAL_HEX8(TILE_EXPLOSION2, map.tiles[5][5]);
 }
 
@@ -339,14 +337,13 @@ void test_bomb_damage_pct_ignored_in_sp_and_for_entities(void)
     Entity e;
     memset(&e, 0, sizeof(e));
     e.type = ENTITY_TYPE_1;
-    e.health = 100;
-    e.max_health = 100;
-    e.x_pos = tile_to_pixel_x(7);
-    e.y_pos = tile_to_pixel_y(7);
+    e.body.max_health = 100;
+    e.body.x_pos = tile_to_pixel_x(7);
+    e.body.y_pos = tile_to_pixel_y(7);
     bombs_set_entity_list(&e);
 
     bombs_check_player_damage(&map, 7, 7, 60);
-    TEST_ASSERT_EQUAL_INT(40, e.health);  /* raw 60 despite MP + 50% */
+    TEST_ASSERT_EQUAL_INT(40, e.body.max_health);  /* raw 60 despite MP + 50% */
 }
 
 int main(void)

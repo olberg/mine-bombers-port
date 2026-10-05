@@ -86,7 +86,9 @@ void ai_move_away(Entity *e, int threat_col, int threat_row,
                   const TileMap *map);
 
 /*
- * Check if entity's direction is blocked by an impassable tile.
+ * The blocked test behind the 33-frame random turn (FUN_1000_83a2): the
+ * tile ahead is neither open, nor sand '2'-'4' (the monster digs through
+ * it), nor treasure (it takes it).
  */
 bool ai_is_blocked(const Entity *e, const TileMap *map);
 

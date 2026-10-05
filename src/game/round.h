@@ -124,9 +124,6 @@ int round_resolve_direction(int player_idx, int current_direction);
 /* Count alive (non-dead) players. */
 int round_count_alive(const Player players[], int num_players);
 
-/* Check if single-player reached the exit tile ('k'). */
-bool round_check_exit_tile(const Player *p, const TileMap *map);
-
 /* Count remaining treasure tiles on the map. */
 int round_count_treasures(const TileMap *map);
 

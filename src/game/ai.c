@@ -167,8 +167,8 @@ static bool can_move_dir(const Entity *e, uint8_t dir, const TileMap *map)
     default: return false;
     }
 
-    int new_x = e->x_pos + dx;
-    int new_y = e->y_pos + dy;
+    int new_x = e->body.x_pos + dx;
+    int new_y = e->body.y_pos + dy;
 
     /* Check corners in movement direction (same logic as entity_move).
      * VGA convention: row from screen X, col from screen Y. */
@@ -197,8 +197,24 @@ static bool can_move_dir(const Entity *e, uint8_t dir, const TileMap *map)
 
 bool ai_is_blocked(const Entity *e, const TileMap *map)
 {
-    if (!e || e->direction == DIR_STOP) return true;
-    return !can_move_dir(e, e->direction, map);
+    /* FUN_1000_83a2: the tile ahead is something the monster will neither
+     * walk into, dig through (sand '2'-'4') nor take (treasure 0x73,
+     * 0x92-0x9A). A stopped monster is not blocked. */
+    if (!e) return false;
+    int row = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+    int col = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
+    switch (e->body.direction) {
+    case DIR_RIGHT: row += 1; break;
+    case DIR_LEFT:  row -= 1; break;
+    case DIR_UP:    col -= 1; break;
+    case DIR_DOWN:  col += 1; break;
+    default: return false;
+    }
+    uint8_t tile = map_get_tile(map, row, col);
+    if (tile_is_passable(tile)) return false;
+    if (tile >= 0x32 && tile <= 0x34) return false;
+    if (tile == 0x73 || (tile >= 0x92 && tile <= 0x9A)) return false;
+    return true;
 }
 
 void ai_move_toward(Entity *e, int target_col, int target_row,
@@ -206,8 +222,8 @@ void ai_move_toward(Entity *e, int target_col, int target_row,
 {
     if (!e || !map) return;
 
-    int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-    int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+    int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+    int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
 
     int dc = target_col - ecol;
     int dr = target_row - erow;
@@ -236,9 +252,9 @@ void ai_move_toward(Entity *e, int target_col, int target_row,
 
     /* Try primary, then secondary, then stop */
     if (primary_dir != DIR_STOP && can_move_dir(e, primary_dir, map)) {
-        e->direction = primary_dir;
+        e->body.direction = primary_dir;
     } else if (secondary_dir != DIR_STOP && can_move_dir(e, secondary_dir, map)) {
-        e->direction = secondary_dir;
+        e->body.direction = secondary_dir;
     }
     /* If both blocked, keep current direction (random redirect handles it) */
 }
@@ -248,8 +264,8 @@ void ai_move_away(Entity *e, int threat_col, int threat_row,
 {
     if (!e || !map) return;
 
-    int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-    int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+    int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+    int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
 
     int dc = ecol - threat_col;  /* inverted: move AWAY */
     int dr = erow - threat_row;
@@ -266,15 +282,15 @@ void ai_move_away(Entity *e, int threat_col, int threat_row,
     }
 
     if (primary_dir != DIR_STOP && can_move_dir(e, primary_dir, map)) {
-        e->direction = primary_dir;
+        e->body.direction = primary_dir;
     } else if (secondary_dir != DIR_STOP && can_move_dir(e, secondary_dir, map)) {
-        e->direction = secondary_dir;
+        e->body.direction = secondary_dir;
     } else {
         /* Both directions blocked: pick random direction 1-4.
          * Original draws Random(4)+1, so the array must be in VALUE order
          * (1=RIGHT 2=LEFT 3=UP 4=DOWN) for the same draw → same direction. */
         static const uint8_t dirs[] = { DIR_RIGHT, DIR_LEFT, DIR_UP, DIR_DOWN };
-        e->direction = dirs[mb_random(4)];
+        e->body.direction = dirs[mb_random(4)];
     }
 }
 
@@ -285,7 +301,7 @@ void ai_move_away(Entity *e, int threat_col, int threat_row,
 static void ai_random_direction(Entity *e)
 {
     static const uint8_t dirs[] = { DIR_RIGHT, DIR_LEFT, DIR_UP, DIR_DOWN };
-    e->direction = dirs[mb_random(4)];
+    e->body.direction = dirs[mb_random(4)];
 }
 
 /*
@@ -316,9 +332,9 @@ static int count_clear_tiles(const TileMap *map, int start_col, int start_row,
 
         /* FUN_1000_894e: check if any OTHER entity is at this tile */
         for (const Entity *ent = entity_head; ent != NULL; ent = ent->next) {
-            if (ent == self || ent->dead) continue;
-            int erow = pixel_to_tile_row(ent->x_pos + SPRITE_W / 2);
-            int ecol = pixel_to_tile_col(ent->y_pos + SPRITE_H / 2);
+            if (ent == self || ent->body.dead) continue;
+            int erow = pixel_to_tile_row(ent->body.x_pos + SPRITE_W / 2);
+            int ecol = pixel_to_tile_col(ent->body.y_pos + SPRITE_H / 2);
             if (ecol == col && erow == row) {
                 return 0;  /* friendly entity in blast path */
             }
@@ -370,19 +386,19 @@ void ai_entity_place_bomb(Entity *e, TileMap *map,
                           const Player players[], int num_players,
                           const Entity *entity_head)
 {
-    if (!e || !map || e->dead || !e->active) return;
-    if (e->direction == DIR_STOP) return;
+    if (!e || !map || e->body.dead || !e->body.awake) return;
+    if (e->body.direction == DIR_STOP) return;
 
     /* Safety check: 5+ clear tiles ahead, no allies/entities in path */
-    if (!ai_should_place_bomb(map, e->x_pos, e->y_pos, e->direction,
+    if (!ai_should_place_bomb(map, e->body.x_pos, e->body.y_pos, e->body.direction,
                                players, num_players, e->owner_player,
                                entity_head, e)) {
         return;
     }
 
     /* Entity tile position (matching original: offset 0xEE / 0xF0) */
-    int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-    int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
+    int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+    int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
     if (erow < 0 || erow >= MAP_ROWS || ecol < 0 || ecol >= MAP_COLS) return;
 
     /* XOR check per player (entity_interaction, seg_1000:5679):
@@ -410,7 +426,7 @@ void ai_entity_place_bomb(Entity *e, TileMap *map,
 
     /* FUN_1000_88ba: write directional arrow tile + overlay=1 */
     uint8_t arrow;
-    switch (e->direction) {
+    switch (e->body.direction) {
     case DIR_DOWN:  arrow = ARROW_DOWN;  break;
     case DIR_UP:    arrow = ARROW_UP;    break;
     case DIR_LEFT:  arrow = ARROW_LEFT;  break;
@@ -422,32 +438,37 @@ void ai_entity_place_bomb(Entity *e, TileMap *map,
     map->overlay[erow][ecol] = 1;  /* immediate detonation next frame */
 }
 
+static void ai_decide(Entity *e, TileMap *map,
+                      const Player players[], int num_players,
+                      Entity *entity_head, int treasure_count);
+
 void ai_update(Entity *e, TileMap *map,
                const Player players[], int num_players,
                int frame_counter, Entity *entity_head,
                int treasure_count)
 {
-    if (!e || e->dead || !e->active) return;
+    if (!e || e->body.dead || !e->body.awake) return;
 
-    int erow = pixel_to_tile_row(e->x_pos + SPRITE_W / 2);
-    int ecol = pixel_to_tile_col(e->y_pos + SPRITE_H / 2);
-
-    /* Random direction changes */
-    if (frame_counter % AI_RANDOM_TICK2 == 0) {
-        /* Unconditional random redirect every 121 frames */
+    /* Order within a frame as in monster_player_collision
+     * (seg_1000:5906-5964): the decision every 26 frames, then the random
+     * turn, every 33 frames when blocked and every 121 regardless. Both
+     * can fall on the same frame. */
+    if (frame_counter % AI_DECISION_TICK == 0) {
+        ai_decide(e, map, players, num_players, entity_head, treasure_count);
+    }
+    if ((frame_counter % AI_RANDOM_TICK == 0 && ai_is_blocked(e, map)) ||
+        frame_counter % AI_RANDOM_TICK2 == 0) {
         ai_random_direction(e);
-        return;
     }
-    if (frame_counter % AI_RANDOM_TICK == 0) {
-        /* Redirect if blocked every 33 frames */
-        if (ai_is_blocked(e, map)) {
-            ai_random_direction(e);
-        }
-        return;
-    }
+}
 
-    /* Main AI decision every 26 frames */
-    if (frame_counter % AI_DECISION_TICK != 0) return;
+/* The decision made every 26 frames. */
+static void ai_decide(Entity *e, TileMap *map,
+                      const Player players[], int num_players,
+                      Entity *entity_head, int treasure_count)
+{
+    int erow = pixel_to_tile_row(e->body.x_pos + SPRITE_W / 2);
+    int ecol = pixel_to_tile_col(e->body.y_pos + SPRITE_H / 2);
 
     /* 1. Search for collectible items (radius 5) */
     AiSearchResult item = ai_find_item(map, ecol, erow, AI_ITEM_RADIUS);
