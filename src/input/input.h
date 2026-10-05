@@ -71,7 +71,7 @@ int player_input_get_key(int player_idx, PlayerInputAction action);
 void player_input_inject_mode(bool enabled);
 void player_input_inject_clear(int player_idx);
 void player_input_inject(int player_idx, PlayerInputAction action,
-                         bool down, bool pressed);
+                         bool down, bool press);
 
 /* Returns true if the action key is currently held down for this player. */
 bool player_input_down(int player_idx, PlayerInputAction action);

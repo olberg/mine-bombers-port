@@ -1,6 +1,10 @@
 #include "unity.h"
 #include "game/hud.h"
 #include "game/config.h"
+#include "game/map_thumbnail.h"
+#include "game/sprites.h"
+#include "gfx/palette.h"
+#include "util/harness_env.h"
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -39,37 +43,20 @@ void test_health_bar_constants(void)
     TEST_ASSERT_EQUAL_INT(21, HUD_MONEY_Y);
 }
 
-/* Verify minimap position constants match decompiled FUN_1010_b227 call */
+/* Verify the shop thumbnail position matches the decompiled FUN_1010_b227 call */
 void test_minimap_constants(void)
 {
-    TEST_ASSERT_EQUAL_INT(288, MINIMAP_X); /* 0x120 */
-    TEST_ASSERT_EQUAL_INT(51, MINIMAP_Y);  /* 0x33 */
+    TEST_ASSERT_EQUAL_INT(288, MAP_THUMBNAIL_SHOP_X); /* 0x120 */
+    TEST_ASSERT_EQUAL_INT(51, MAP_THUMBNAIL_SHOP_Y);  /* 0x33 */
 
-    /* Minimap fits within 640x480 screen:
-     * X: 288 + MAP_COLS(45) = 333 < 640
-     * Y: 51 + MAP_ROWS(64) = 115 < 480 */
-    TEST_ASSERT_TRUE(MINIMAP_X + MAP_COLS <= 640);
-    TEST_ASSERT_TRUE(MINIMAP_Y + MAP_ROWS <= 480);
+    /* It fits on the 640x480 screen: rows run along X, cols along Y */
+    TEST_ASSERT_TRUE(MAP_THUMBNAIL_SHOP_X + MAP_ROWS <= 640);
+    TEST_ASSERT_TRUE(MAP_THUMBNAIL_SHOP_Y + MAP_COLS <= 480);
 }
 
-/* Verify minimap tile-to-color mapping matches FUN_1010_dab7.
- * The function is static in hud.c so we replicate its logic here for testing. */
-static uint8_t test_tile_color(uint8_t tile)
-{
-    /* Reproduce the exact branching from FUN_1010_dab7 (seg_1010:8150-8199) */
-    if (tile >= 0x32 && tile <= 0x34) return 12;
-    if ((tile >= 0x37 && tile <= 0x39) || (tile >= 0x41 && tile <= 0x46)) return 9;
-    if (tile == 0x73 || (tile > 0x91 && tile < 0x9B)) return 5;
-    if (tile == 0x30 || tile == 0x66 || tile == 0xAF) return 14;
-    if (tile >= 0x35 && tile <= 0x36) return 12;
-    if (tile == 0x31) return 8;
-    if (tile == 0xA4 || tile == 0x70 || tile == 0x71) return 9;
-    if (tile == 0x65) return 14;
-    if (tile == 0x79) return 12;
-    if (tile == 0x9C) return 12;
-    if (tile == 0x6F) return 4;
-    return 12;
-}
+/* Verify the thumbnail's tile-to-color mapping matches FUN_1010_dab7
+ * (seg_1010:8150-8199). */
+#define test_tile_color map_thumbnail_color
 
 void test_minimap_tile_colors(void)
 {
@@ -164,9 +151,100 @@ void test_timer_bar_fill_width(void)
     TEST_ASSERT_EQUAL_INT(0, hud_timer_fill_width(0, -1));
 }
 
+/* FUN_1010_6030: first char of the runtime name (the "N " prefix digit) is
+ * blanked and at most 10 characters are shown. */
+void test_name_line_blanks_prefix_and_truncates(void)
+{
+    char buf[32];
+    hud_format_name(buf, sizeof(buf), "1 Plr 1");
+    TEST_ASSERT_EQUAL_STRING("  Plr 1", buf);
+    hud_format_name(buf, sizeof(buf), "3 Abcdefghijklmn");
+    TEST_ASSERT_EQUAL_STRING("  Abcdefgh", buf);
+    hud_format_name(buf, sizeof(buf), "");
+    TEST_ASSERT_EQUAL_STRING("", buf);
+    char small[4];
+    hud_format_name(small, sizeof(small), "2 Bob");
+    TEST_ASSERT_EQUAL_STRING("  B", small);
+}
+
+/* Names that never went through player select have no prefix to hide. */
+void test_name_line_keeps_names_without_prefix(void)
+{
+    char buf[32];
+    hud_format_name(buf, sizeof(buf), "BOT1");
+    TEST_ASSERT_EQUAL_STRING("BOT1", buf);
+    hud_format_name(buf, sizeof(buf), "Player 1");
+    TEST_ASSERT_EQUAL_STRING("Player 1", buf);
+    hud_format_name(buf, sizeof(buf), "5 Five");
+    TEST_ASSERT_EQUAL_STRING("5 Five", buf);
+}
+
+static int count_color(const Image *img, int x0, int y0, int w, int h, Color c)
+{
+    const Color *px = (const Color *)img->data;
+    int n = 0;
+    for (int y = y0; y < y0 + h; y++) {
+        for (int x = x0; x < x0 + w; x++) {
+            Color p = px[y * img->width + x];
+            if (p.r == c.r && p.g == c.g && p.b == c.b) n++;
+        }
+    }
+    return n;
+}
+
+/* draw_score_displays prints dig power in colour 3 and draw_points_displays
+ * prints money in colour 5 (seg_1010:3438, 3495); neither uses the white of
+ * the name and the ammo count. Rendered for real and read back. */
+void test_dig_and_money_are_drawn_in_their_colors(void)
+{
+    InitWindow(1, 1, "test");
+    harness_env_apply_monitor();
+    if (!sprites_init()) {
+        CloseWindow();
+        TEST_IGNORE_MESSAGE("SIKA.SPY not available in assets/");
+        return;
+    }
+    palette_init(sprites_get_palette());
+    hud_init(1);
+
+    Player p;
+    player_init_defaults(&p, 0);
+    p.cash = 250;
+
+    RenderTexture2D target = LoadRenderTexture(640, 480);
+    BeginTextureMode(target);
+    ClearBackground(BLACK);
+    hud_draw(&p, 1, 0, true);
+    EndTextureMode();
+    Image frame = LoadImageFromTexture(target.texture);
+    ImageFlipVertical(&frame);
+    ImageFormat(&frame, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+
+    int x = hud_panel_x(0) + HUD_DIG_X;
+    Color white = palette_get_color(HUD_TEXT_COLOR);
+    int dig_own   = count_color(&frame, x, HUD_DIG_Y, 41, 9, palette_get_color(HUD_DIG_COLOR));
+    int dig_white = count_color(&frame, x, HUD_DIG_Y, 41, 9, white);
+    int money_own   = count_color(&frame, x, HUD_MONEY_Y, 41, 9, palette_get_color(HUD_MONEY_COLOR));
+    int money_white = count_color(&frame, x, HUD_MONEY_Y, 41, 9, white);
+
+    UnloadImage(frame);
+    UnloadRenderTexture(target);
+    hud_cleanup();
+    sprites_cleanup();
+    CloseWindow();
+
+    TEST_ASSERT_GREATER_THAN_INT(0, dig_own);
+    TEST_ASSERT_EQUAL_INT(0, dig_white);
+    TEST_ASSERT_GREATER_THAN_INT(0, money_own);
+    TEST_ASSERT_EQUAL_INT(0, money_white);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_name_line_blanks_prefix_and_truncates);
+    RUN_TEST(test_name_line_keeps_names_without_prefix);
+    RUN_TEST(test_dig_and_money_are_drawn_in_their_colors);
     RUN_TEST(test_panel_positions);
     RUN_TEST(test_health_bar_constants);
     RUN_TEST(test_minimap_constants);

@@ -78,7 +78,11 @@ if num_players == 3: shop page (P1 + P2), then shop page (P3 solo)
 if num_players == 4: shop page (P1 + P2), then shop page (P3 + P4)
 
 swap_display_pages()
-redraw_game_screen()
+redraw_game_screen()             — the round's one full redraw
+— The decompiled name "g_minimap_enabled" is a mislabel: it is the darkness
+— flag (DARKNESS option on, or one player; seg_1010:7197-7201).
+if darkness off:
+    FUN_1000_758a()              — one move_player() pass over the monster list
 palette_fade_in()
 
 — Per-frame game loop
@@ -124,9 +128,9 @@ if frame_counter % 5 == 0:
         process_weapons()
         check_player_death()
 
-— Rendering
-redraw_game_screen()
-if minimap_enabled: draw minimap
+— Rendering: no full redraw and no minimap here. redraw_game_screen() runs
+— once before the loop (see Round Loop); during the loop a tile is redrawn
+— when it changes (mark_tile_for_redraw, seg_1010:5258-5275).
 ```
 
 ## Game States

@@ -77,6 +77,8 @@ static void clear_horizontal_strip(TileMap *map, int row, int start_col, int end
 
 /* Clear random-length paths near spawn corners to ensure players can move.
  * Decompiled ref: seg_1010:7456-7512. Each strip is 4+random(6) tiles long.
+ * The original does this only when the round's map slot is the random one
+ * (table entry > 29999, seg_1010:7455); a chosen map is left as drawn.
  * For 2+ players: clear near top-left and bottom-right corners.
  * For 3+ players: also clear near bottom-left and top-right corners. */
 static void clear_spawn_paths(TileMap *map, int num_players)
@@ -146,8 +148,10 @@ void round_place_players(Round *r, Player players[], int num_players)
         player_reset_for_round(&players[i]);
     }
 
-    /* Clear paths near spawn corners so players can move */
-    clear_spawn_paths(&r->map, num_players);
+    /* Clear paths near spawn corners so players can move (random maps only) */
+    if (r->random_map) {
+        clear_spawn_paths(&r->map, num_players);
+    }
 }
 
 bool round_init(Round *r, const char *map_path, int round_number,
@@ -171,8 +175,9 @@ bool round_init(Round *r, const char *map_path, int round_number,
 
     /* Darkness/fog-of-war: always on in single-player, optional in multiplayer
      * via "Darkness" config option (g_config.option_toggle[0]).
-     * Decompiled ref: seg_1010:7197-7201. When active, minimap overlay is
-     * also drawn (player needs it to navigate the hidden map). */
+     * Decompiled ref: seg_1010:7197-7201. There is no in-round minimap:
+     * the 1-pixel-per-tile map (FUN_1010_b227) exists only as the shop's
+     * NEXT LEVEL thumbnail, drawn when darkness is off (seg_1010:6540). */
     /* Install the in-game (SIKA.SPY) palette: the original fades the round
      * in to the palette at DS:0x688 (seg_1000:7135). Without this the
      * palette module still holds the previous screen's palette — or black
@@ -187,9 +192,6 @@ bool round_init(Round *r, const char *map_path, int round_number,
      * The visibility reveal system will reveal tiles as the player moves. */
     if (r->darkness_enabled) {
         visibility_init(&r->map);
-        map_renderer_set_darkness(true);
-    } else {
-        map_renderer_set_darkness(false);
     }
 
     if (time_limit > 0) {
@@ -209,6 +211,7 @@ bool round_init_random(Round *r, int round_number, int time_limit,
                        int treasure_count)
 {
     memset(r, 0, sizeof(Round));
+    r->random_map = true;
 
     map_generate_random(&r->map, treasure_count);
     map_init_collision(&r->map);
@@ -228,9 +231,6 @@ bool round_init_random(Round *r, int round_number, int time_limit,
 
     if (r->darkness_enabled) {
         visibility_init(&r->map);
-        map_renderer_set_darkness(true);
-    } else {
-        map_renderer_set_darkness(false);
     }
 
     if (time_limit > 0) {
@@ -355,7 +355,7 @@ static void round_begin_fade_out(Round *r)
 static bool bomb_latch[MAX_PLAYERS];
 static bool cycle_latch[MAX_PLAYERS];
 
-RoundState round_update(Round *r, Player players[], int num_players)
+static RoundState round_step(Round *r, Player players[], int num_players)
 {
     if (r->state == ROUND_OVER) return ROUND_OVER;
 
@@ -367,6 +367,9 @@ RoundState round_update(Round *r, Player players[], int num_players)
             /* Clear any stale key latches from previous round */
             memset(bomb_latch, 0, sizeof(bomb_latch));
             memset(cycle_latch, 0, sizeof(cycle_latch));
+            if (r->darkness_enabled) {
+                visibility_snapshot(&r->map);
+            }
         }
         return r->state;
     }
@@ -451,7 +454,8 @@ RoundState round_update(Round *r, Player players[], int num_players)
      * remote) only on even frames inside process_weapons, AFTER the move —
      * original round loop seg_1000:7186-7250.
      * Entity list must be current before the loop: player_dig's bomb-push
-     * path checks for entities on the destination tile. */
+     * path checks for entities on the destination tile, and explosion
+     * damage in bombs_update below checks entities too. */
     bombs_set_entity_list(r->entity_head);
     for (int i = 0; i < num_players && i < MAX_PLAYERS; i++) {
         if (players[i].dead) continue;
@@ -472,8 +476,6 @@ RoundState round_update(Round *r, Player players[], int num_players)
          * — not per frame. */
     }
 
-    /* Set entity list so explosion damage can check entities */
-    bombs_set_entity_list(r->entity_head);
     bombs_update(&r->map);
 
     /* === Every 2 frames === */
@@ -650,6 +652,21 @@ RoundState round_update(Round *r, Player players[], int num_players)
     return r->state;
 }
 
+RoundState round_update(Round *r, Player players[], int num_players)
+{
+    /* Tile changes made during the fade-in belong to round setup; the
+     * snapshot taken when the fade ends absorbs them. */
+    bool in_play = (r->state != ROUND_FADE_IN);
+    RoundState state = round_step(r, players, num_players);
+
+    /* Reveal what this step changed, also on the frame that ends the
+     * round, where the step returns before reaching its end. */
+    if (in_play && r->darkness_enabled) {
+        visibility_reveal_changed(&r->map);
+    }
+    return state;
+}
+
 /* Map DIR_ values to sprite sheet band indices.
  * Sprite sheet bands: 0=RIGHT, 1=LEFT, 2=UP, 3=DOWN — i.e. the original's
  * direction value minus 1, now that DIR_* uses the original encoding
@@ -787,11 +804,6 @@ void round_draw(Round *r, const Player players[], int num_players)
      * no time limit set — it then just stays full. */
     if (!r->single_player) {
         hud_draw_timer(r->time_remaining, r->time_total);
-    }
-
-    /* Draw minimap overlay when darkness is active (not affected by screen shake) */
-    if (r->darkness_enabled) {
-        hud_draw_minimap(&r->map, players, num_players);
     }
 
     /* Decrement screen shake after rendering (seg_1010:7724).
@@ -945,6 +957,5 @@ void round_apply_interest(Player players[], int num_players)
 void round_cleanup(Round *r)
 {
     entities_cleanup(&r->entity_head);
-    map_renderer_set_darkness(false);
     memset(r, 0, sizeof(Round));
 }

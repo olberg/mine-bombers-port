@@ -175,12 +175,12 @@ void player_input_inject_clear(int player_idx)
 }
 
 void player_input_inject(int player_idx, PlayerInputAction action,
-                         bool down, bool pressed)
+                         bool down, bool press)
 {
     if (player_idx < 0 || player_idx >= MAX_PLAYERS_INPUT) return;
     if (action < 0 || action >= PLAYER_INPUT_COUNT) return;
     inject_down[player_idx][action] = down;
-    inject_press[player_idx][action] = pressed;
+    inject_press[player_idx][action] = press;
 }
 
 bool player_input_down(int player_idx, PlayerInputAction action)
@@ -217,32 +217,6 @@ bool player_input_down(int player_idx, PlayerInputAction action)
     return result;
 }
 
-bool player_input_pressed(int player_idx, PlayerInputAction action)
-{
-    if (player_idx < 0 || player_idx >= MAX_PLAYERS_INPUT) return false;
-    if (action < 0 || action >= PLAYER_INPUT_COUNT) return false;
-
-    if (inject_mode) return inject_press[player_idx][action];
-
-    InputBinding b = player_bindings[player_idx][action];
-
-    if (b.type == BIND_KEYBOARD) {
-        /* Include OS key repeat: the original's one-shot keys (bomb, choose)
-         * clear the ISR key-state byte after consuming it, but the keyboard's
-         * typematic repeat sets it again while the key stays held — so
-         * holding bomb re-places at the typematic rate (seg_1000:2631-2632).
-         * IsKeyPressedRepeat approximates that with the host repeat rate.
-         * Gamepads stay edge-only: the original's joystick virtual scancodes
-         * were polled levels with no typematic. */
-        return IsKeyPressed(b.code) || IsKeyPressedRepeat(b.code);
-    } else if (b.type == BIND_GAMEPAD) {
-        if (IsGamepadAvailable(player_idx))
-            return IsGamepadButtonPressed(player_idx, b.code);
-    }
-
-    return false;
-}
-
 bool player_input_edge(int player_idx, PlayerInputAction action)
 {
     if (player_idx < 0 || player_idx >= MAX_PLAYERS_INPUT) return false;
@@ -257,6 +231,30 @@ bool player_input_edge(int player_idx, PlayerInputAction action)
     } else if (b.type == BIND_GAMEPAD) {
         if (IsGamepadAvailable(player_idx))
             return IsGamepadButtonPressed(player_idx, b.code);
+    }
+
+    return false;
+}
+
+bool player_input_pressed(int player_idx, PlayerInputAction action)
+{
+    if (player_input_edge(player_idx, action)) return true;
+
+    if (player_idx < 0 || player_idx >= MAX_PLAYERS_INPUT) return false;
+    if (action < 0 || action >= PLAYER_INPUT_COUNT) return false;
+    if (inject_mode) return false;
+
+    InputBinding b = player_bindings[player_idx][action];
+
+    if (b.type == BIND_KEYBOARD) {
+        /* Include OS key repeat: the original's one-shot keys (bomb, choose)
+         * clear the ISR key-state byte after consuming it, but the keyboard's
+         * typematic repeat sets it again while the key stays held — so
+         * holding bomb re-places at the typematic rate (seg_1000:2631-2632).
+         * IsKeyPressedRepeat approximates that with the host repeat rate.
+         * Gamepads stay edge-only: the original's joystick virtual scancodes
+         * were polled levels with no typematic. */
+        return IsKeyPressedRepeat(b.code);
     }
 
     return false;

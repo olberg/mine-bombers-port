@@ -1,5 +1,6 @@
 #include "unity.h"
 #include "game/sprites.h"
+#include "util/harness_env.h"
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -9,6 +10,7 @@ void test_tile_to_sprite_mapping(void)
     /* Verify common tile bytes have valid sprite mappings after init.
      * We need a window for LoadTextureFromImage, so we init one briefly. */
     InitWindow(1, 1, "test");
+    harness_env_apply_monitor();
     bool ok = sprites_init();
     if (!ok) {
         CloseWindow();
@@ -55,6 +57,7 @@ void test_tile_to_sprite_mapping(void)
 void test_sprite_dimensions(void)
 {
     InitWindow(1, 1, "test");
+    harness_env_apply_monitor();
     bool ok = sprites_init();
     if (!ok) {
         CloseWindow();
@@ -83,6 +86,7 @@ void test_sprite_dimensions(void)
 void test_sprite_atlas_loads(void)
 {
     InitWindow(1, 1, "test");
+    harness_env_apply_monitor();
     bool ok = sprites_init();
     if (!ok) {
         CloseWindow();
@@ -148,6 +152,7 @@ void test_tile_sprite_coordinates(void)
      * (seg_1010:4609-4694) traced through draw_map_tile (seg_1010:4880-5250).
      * Format: load_sprite_from_sheet(stack, Y, X) → rect at (X, Y). */
     InitWindow(1, 1, "test");
+    harness_env_apply_monitor();
     bool ok = sprites_init();
     if (!ok) {
         CloseWindow();

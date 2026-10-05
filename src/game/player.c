@@ -35,6 +35,11 @@ int player_weapon_index(uint8_t weapon_id)
     return -1;
 }
 
+bool player_name_has_number_prefix(const char *name)
+{
+    return name[0] >= '1' && name[0] <= '4' && name[1] == ' ';
+}
+
 void player_init_defaults(Player *p, int player_num)
 {
     memset(p, 0, sizeof(*p));

@@ -4,11 +4,29 @@
 #include "game/player.h"
 #include "game/weapons.h"
 #include "game/config.h"
+#include "input/input.h"
+#include "util/harness_env.h"
+#include "raylib.h"
 #include <stdlib.h>
 #include <stdint.h>
 
+static bool shop_screen_open;
+
 void setUp(void) {}
-void tearDown(void) {}
+
+void tearDown(void)
+{
+    /* A failed assertion longjmps out of the test body, so the shop-screen
+     * tests rely on this to release the window and the injection mode. */
+    if (shop_screen_open) {
+        shop_cleanup();
+        CloseWindow();
+        shop_screen_open = false;
+    }
+    player_input_inject_mode(false);
+    g_config.option_toggle[1] = 0;
+    g_config.option_toggle[2] = 0;
+}
 
 /* Buy weapon: verify cash deducted and inventory incremented */
 void test_buy_deducts_cash(void)
@@ -285,6 +303,155 @@ void test_free_market_rerolls_per_page(void)
     g_config.option_toggle[1] = 0;
 }
 
+/* ---- Shop auto-repeat / tap behavior, driven through shop_update ----
+ * shop_update needs a GL context (SHOPPIC texture, palette upload), so these
+ * open a 1x1 window like test_sprites does, then drive player 0 purely
+ * through input injection. Buy/sell effects are read from the inventory. */
+
+static bool open_shop(int players, int sell_option)
+{
+    InitWindow(1, 1, "test");
+    harness_env_apply_monitor();
+    if (!FileExists("assets/SHOPPIC.SPY")) {
+        CloseWindow();
+        return false;
+    }
+    shop_screen_open = true;
+
+    player_input_init_defaults();
+    player_input_inject_mode(true);
+    g_config.num_players = (uint8_t)players;
+    g_config.option_toggle[1] = 0;            /* fixed prices */
+    g_config.option_toggle[2] = (uint8_t)sell_option;
+    for (int i = 0; i < 4; i++) {
+        player_init_defaults(&g_players[i], i);
+        g_players[i].cash = 10000;
+    }
+
+    shop_init();
+    /* Run out the fade-in so the shop is accepting input */
+    for (int i = 0; i < 30; i++) shop_update();
+    return true;
+}
+
+/* One frame with player 0's BOMB / CYCLE / RIGHT injected. */
+static void frame(bool bomb_down, bool bomb_press,
+                  bool cycle_down, bool cycle_press, bool right_press)
+{
+    player_input_inject_clear(0);
+    player_input_inject(0, PLAYER_INPUT_BOMB, bomb_down, bomb_press);
+    player_input_inject(0, PLAYER_INPUT_CYCLE, cycle_down, cycle_press);
+    player_input_inject(0, PLAYER_INPUT_RIGHT, right_press, right_press);
+    ShopResult r = shop_update();
+    TEST_ASSERT_EQUAL_INT(SHOP_ACTIVE, r);
+}
+
+static int small_qty(void)  { return g_players[0].weapons[weapon_inv_index(WEAPON_SMALL_BOMB)]; }
+static int medium_qty(void) { return g_players[0].weapons[weapon_inv_index(WEAPON_MEDIUM_BOMB)]; }
+
+/* Every discrete tap on the same cell buys: the delay counter left over from
+ * the previous fire must not swallow the next press. */
+void test_shop_separate_taps_each_buy(void)
+{
+    if (!open_shop(1, 0)) TEST_IGNORE_MESSAGE("SHOPPIC.SPY not available in assets/");
+
+    int before = small_qty();
+    for (int tap = 0; tap < 5; tap++) {
+        frame(true, true, false, false, false);   /* press */
+        frame(false, false, false, false, false); /* release */
+    }
+    TEST_ASSERT_EQUAL_INT(before + 5, small_qty());
+}
+
+/* A held key follows the accelerating ramp: first buy on the press edge,
+ * then at interval 0x14 - speed/3 (20, 13, 9, 6, then 4 at the speed cap) —
+ * never once per frame. */
+void test_shop_held_key_follows_ramp(void)
+{
+    if (!open_shop(1, 0)) TEST_IGNORE_MESSAGE("SHOPPIC.SPY not available in assets/");
+
+    static const int expected[] = {1, 21, 34, 43, 49, 53, 57};
+    int fires[16];
+    int nfires = 0;
+    int last = small_qty();
+
+    for (int f = 1; f <= 60; f++) {
+        frame(true, f == 1, false, false, false);
+        int q = small_qty();
+        TEST_ASSERT_TRUE(q - last <= 1);
+        if (q != last && nfires < 16) fires[nfires++] = f;
+        last = q;
+    }
+
+    TEST_ASSERT_EQUAL_INT(7, nfires);
+    TEST_ASSERT_EQUAL_INT_ARRAY(expected, fires, 7);
+}
+
+/* Moving the cursor resets speed/delay (decompiled 6586-6589): the new cell
+ * fires on the move frame and the next repeat is a full 20 frames later,
+ * not at the shortened interval the ramp had reached. */
+void test_shop_cursor_move_resets_ramp(void)
+{
+    if (!open_shop(1, 0)) TEST_IGNORE_MESSAGE("SHOPPIC.SPY not available in assets/");
+
+    /* Hold BOMB on cell 1 for 25 frames: buys at frames 1 and 21 */
+    int small_before = small_qty();
+    for (int f = 1; f <= 25; f++) frame(true, f == 1, false, false, false);
+    int small_after_ramp = small_qty();
+    TEST_ASSERT_EQUAL_INT(small_before + 2, small_after_ramp);
+    int medium_before = medium_qty();
+
+    /* Frame 26: step RIGHT to cell 2 while BOMB stays held */
+    frame(true, false, false, false, true);
+    TEST_ASSERT_EQUAL_INT(small_after_ramp, small_qty());
+    TEST_ASSERT_EQUAL_INT(medium_before + 1, medium_qty());
+
+    /* Frames 27..45: ramp restarted at interval 20, so nothing fires */
+    for (int f = 27; f <= 45; f++) {
+        frame(true, false, false, false, false);
+        TEST_ASSERT_EQUAL_INT(medium_before + 1, medium_qty());
+    }
+    /* Frame 46: next repeat */
+    frame(true, false, false, false, false);
+    TEST_ASSERT_EQUAL_INT(medium_before + 2, medium_qty());
+    TEST_ASSERT_EQUAL_INT(small_after_ramp, small_qty());
+}
+
+/* The CYCLE (sell) key gets the same tap behavior when selling is enabled
+ * (single-player forces it on). */
+void test_shop_separate_taps_each_sell(void)
+{
+    if (!open_shop(1, 0)) TEST_IGNORE_MESSAGE("SHOPPIC.SPY not available in assets/");
+
+    frame(false, false, false, false, true);   /* cursor to cell 2 (medium bomb) */
+    g_players[0].weapons[weapon_inv_index(WEAPON_MEDIUM_BOMB)] = 10;
+    int32_t cash = g_players[0].cash;
+
+    for (int tap = 0; tap < 4; tap++) {
+        frame(false, false, true, true, false);
+        frame(false, false, false, false, false);
+    }
+    TEST_ASSERT_EQUAL_INT(6, medium_qty());
+    TEST_ASSERT_TRUE(g_players[0].cash > cash);
+}
+
+/* With selling disabled (2+ players, option_toggle[2] off) the CYCLE key does
+ * nothing in the shop, tap or hold. */
+void test_shop_sell_disabled_ignores_cycle(void)
+{
+    if (!open_shop(2, 0)) TEST_IGNORE_MESSAGE("SHOPPIC.SPY not available in assets/");
+
+    frame(false, false, false, false, true);   /* cursor to cell 2 */
+    g_players[0].weapons[weapon_inv_index(WEAPON_MEDIUM_BOMB)] = 10;
+
+    for (int tap = 0; tap < 4; tap++) {
+        frame(false, false, true, true, false);
+        frame(false, false, false, false, false);
+    }
+    for (int f = 0; f < 30; f++) frame(false, false, true, false, false);
+    TEST_ASSERT_EQUAL_INT(10, medium_qty());
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -301,5 +468,10 @@ int main(void)
     RUN_TEST(test_page_panel_layout);
     RUN_TEST(test_selling_gate);
     RUN_TEST(test_free_market_rerolls_per_page);
+    RUN_TEST(test_shop_separate_taps_each_buy);
+    RUN_TEST(test_shop_held_key_follows_ramp);
+    RUN_TEST(test_shop_cursor_move_resets_ramp);
+    RUN_TEST(test_shop_separate_taps_each_sell);
+    RUN_TEST(test_shop_sell_disabled_ignores_cycle);
     return UNITY_END();
 }

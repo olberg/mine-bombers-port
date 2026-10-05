@@ -15,15 +15,21 @@
  * (misnamed by decompiler). Grid cell 0 is the "Random" pseudo-map (name
  * table entry 0 = fixed string "Random", maps at 1..N sorted). On picker
  * entry all slots are zeroed; Enter/Space appends the cursor's grid index
- * to the next round slot; the fill key (code -0x61, port: F11) overwrites
+ * to the next round slot; the fill key (code -0x61 = F1) overwrites
  * ALL round slots with unique random grid cells (range includes "Random");
- * ESC (or code -0x58, port: F12) exits, converting still-0 slots to 32000.
+ * ESC or code -0x58 (F10) exits, converting still-0 slots to 32000.
+ * Key codes come from check_keypress (seg_1008:3420): ReadKey, and for an
+ * extended key the scan code + 100 (F1 = 59 + 100 = 0x9F = -0x61,
+ * F10 = 68 + 100 = 0xA8 = -0x58; arrows are 0xAC/0xB4/0xAF/0xB1 the same
+ * way). The on-screen help reads "F1 = Random select" / "ESC = Done".
  * Round-loop gate: slot < 30000 → load that map, else random
  * (seg_1000:7082). There is no undo key in the original.
  */
 
 #include "game/map_picker.h"
 #include "game/map_list.h"
+#include "game/map.h"
+#include "game/map_thumbnail.h"
 #include "game/config.h"
 #include "loaders/spy_loader.h"
 #include "loaders/font_loader.h"
@@ -44,9 +50,13 @@
 #define GRID_Y_START 74    /* 0x4A */
 #define GRID_Y_STEP  10    /* 10px per row */
 
+/* Cursor bar behind the highlighted name */
+#define GRID_BAR_W   71
+#define GRID_BAR_H   9
+
 /* Round counter display position */
 #define COUNTER_X    15    /* 0x0F */
-#define COUNTER_Y    12    /* 0x0C */
+#define COUNTER_Y    15    /* 0x0F */
 
 typedef enum {
     MPICK_FADE_IN,
@@ -164,6 +174,28 @@ int map_picker_assigned_count(void)
     return assigned_count;
 }
 
+/* Map under the cursor for the preview box (FUN_1010_db96,
+ * seg_1010:8203-8271), reloaded when the cursor moves to another cell. */
+#define PREVIEW_UNSET (-2)
+static TileMap preview_map;
+static int  preview_index = PREVIEW_UNSET;  /* map_list index, -1 = "Random" */
+static bool preview_ok;
+
+static void update_preview(void)
+{
+    int cur_idx = grid_to_index(cursor_row, cursor_col);
+    int want = (cur_idx >= 1 && cur_idx < total_maps + 1) ? cur_idx - 1 : -1;
+    if (want == preview_index) return;
+
+    preview_index = want;
+    preview_ok = false;
+    if (want >= 0) {
+        char path[64];
+        preview_ok = map_list_build_path(path, sizeof(path), "assets", want) &&
+                     map_load(&preview_map, path);
+    }
+}
+
 void map_picker_init(void)
 {
     total_maps = map_list_count();
@@ -192,6 +224,8 @@ void map_picker_init(void)
 
     cursor_col = 0;
     cursor_row = 0;
+    preview_index = PREVIEW_UNSET;
+    update_preview();
 
     palette_init(bg_palette);
     palette_start_fade_in(FADE_STEPS);
@@ -249,24 +283,22 @@ MapPickerResult map_picker_update(void)
 
         /* ENTER / SPACE — assign current grid cell (incl. "Random") to the
          * next round (seg_1010:8493-8498) */
-        if (input_pressed(INPUT_CONFIRM)) {
+        if (input_pressed(INPUT_CONFIRM) || IsKeyPressed(KEY_SPACE)) {
             map_picker_assign_grid(grid_to_index(cursor_row, cursor_col),
                                    g_config.total_rounds);
         }
 
-        /* Random-fill key — overwrite ALL rounds with random unique grid
-         * cells (seg_1010:8501-8523). The original triggers on its key
-         * code -0x61; F11 is the port's mapping (identity unverified). */
-        if (IsKeyPressed(KEY_F11)) {
+        /* Random-fill key F1 (code -0x61) — overwrite ALL rounds with random
+         * unique grid cells (seg_1010:8501-8523). */
+        if (IsKeyPressed(KEY_F1)) {
             map_picker_fill_random(g_config.total_rounds, total_maps);
         }
 
         /* NOTE: the original has NO undo key — a previous port version
          * had Backspace-undo here; removed for fidelity. */
 
-        /* ESC — exit map picker (the original also exits on key code
-         * -0x58, likely F12) */
-        if (input_pressed(INPUT_CANCEL) || IsKeyPressed(KEY_F12)) {
+        /* ESC or F10 (code -0x58) — exit map picker */
+        if (input_pressed(INPUT_CANCEL) || input_pressed(INPUT_QUIT)) {
             map_picker_finalize();
             palette_start_fade_out(FADE_STEPS);
             pick_state = MPICK_FADE_OUT;
@@ -287,6 +319,7 @@ MapPickerResult map_picker_update(void)
         break;
     }
 
+    update_preview();
     return MAP_PICKER_NONE;
 }
 
@@ -299,16 +332,20 @@ void map_picker_draw(void)
     if (pick_state == MPICK_FADE_IN && palette_is_fading()) return;
     if (total_maps < 1) return;
 
-    Color col_normal = palette_get_color(1);      /* blue — unselected */
-    Color col_selected = palette_get_color(7);     /* yellow — already assigned */
-    Color col_cursor = palette_get_color(4);       /* red — cursor on unselected */
-    Color col_cursor_sel = palette_get_color(5);   /* magenta — cursor on selected */
+    Color col_normal = palette_get_color(1);       /* unselected */
+    Color col_selected = palette_get_color(7);     /* already assigned */
+    Color col_cursor = palette_get_color(4);       /* "Random" cell, unassigned */
+    Color col_cursor_sel = palette_get_color(5);   /* "Random" cell, assigned */
+    Color col_bar_text = palette_get_color(0);     /* cursor cell text, unassigned */
+    Color col_bar_text_sel = palette_get_color(6); /* cursor cell text, assigned */
+    Color col_bar = palette_get_color(1);          /* cursor bar */
 
     /* Draw the grid: cell 0 = "Random", cells 1..N = map names.
-     * The "Random" cell is ALWAYS drawn in the cursor colors (4/5),
-     * cursor or not — FUN_1010_dd1c/de6a special-case row+col == 0 —
-     * which makes the cursor invisible while it sits on that cell,
-     * exactly as in the original. */
+     * The "Random" cell is ALWAYS drawn in colors 4/5, cursor or not —
+     * FUN_1010_dd1c/de6a special-case row+col == 0. The cell under the cursor
+     * is drawn on a 71x9 bar (FUN_1010_dd1c: fill_rect(row*10+0x52,
+     * col*0x50+0x46, row*10+0x4a, col*0x50)) in colors 0 (unassigned) or 6
+     * (assigned). */
     for (int r = 0; r < total_rows; r++) {
         for (int c = 0; c < GRID_COLS; c++) {
             int grid_idx = grid_to_index(r, c);
@@ -325,8 +362,13 @@ void map_picker_draw(void)
             bool assigned = is_grid_assigned(grid_idx);
 
             Color col;
-            if (grid_idx == 0 || is_cursor) {
+            if (is_cursor) {
+                DrawRectangle(x, y, GRID_BAR_W, GRID_BAR_H, col_bar);
+            }
+            if (grid_idx == 0) {
                 col = assigned ? col_cursor_sel : col_cursor;
+            } else if (is_cursor) {
+                col = assigned ? col_bar_text_sel : col_bar_text;
             } else {
                 col = assigned ? col_selected : col_normal;
             }
@@ -335,11 +377,24 @@ void map_picker_draw(void)
         }
     }
 
-    /* Draw round counter (how many rounds assigned / total) */
+    /* Selected counter: just the number of rounds assigned so far
+     * (seg_1010:8574-8582, number printed at (15, 15) in color 1). */
     {
         char buf[32];
-        snprintf(buf, sizeof(buf), "%d/%d", assigned_count, g_config.total_rounds);
+        snprintf(buf, sizeof(buf), "%d", assigned_count);
         DrawTextFON(&mpick_font, buf, COUNTER_X, COUNTER_Y, col_normal);
+    }
+
+    /* Preview of the map under the cursor, one pixel per tile. For
+     * "Random", or a file that cannot be read, the original fills the box
+     * with colour 0 instead: fill_rect(0x33, 0x189, 7, 0x14a), corners
+     * inclusive (seg_1010:8268-8271). */
+    if (preview_ok) {
+        map_thumbnail_draw(&preview_map, MAP_PICKER_PREVIEW_X,
+                           MAP_PICKER_PREVIEW_Y);
+    } else {
+        DrawRectangle(MAP_PICKER_PREVIEW_X, MAP_PICKER_PREVIEW_Y,
+                      MAP_ROWS, MAP_COLS, palette_get_color(0));
     }
 }
 

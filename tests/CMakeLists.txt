@@ -185,6 +185,7 @@ add_unity_test(test_bombs test_bombs.c
 # HUD test
 add_unity_test(test_hud test_hud.c
     ${CMAKE_SOURCE_DIR}/src/game/hud.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_thumbnail.c
     ${CMAKE_SOURCE_DIR}/src/game/player.c
     ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
     ${CMAKE_SOURCE_DIR}/src/game/weapons.c
@@ -196,6 +197,7 @@ add_unity_test(test_hud test_hud.c
 # Shop test
 add_unity_test(test_shop test_shop.c
     ${CMAKE_SOURCE_DIR}/src/game/shop.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_thumbnail.c
     ${CMAKE_SOURCE_DIR}/src/game/player.c
     ${CMAKE_SOURCE_DIR}/src/game/weapons.c
     ${CMAKE_SOURCE_DIR}/src/game/config.c
@@ -333,9 +335,23 @@ add_test(NAME test_mp_soak
 set_tests_properties(test_mp_soak PROPERTIES TIMEOUT 600 RUN_SERIAL TRUE)
 
 # Map picker test
+# The picker previews maps, so it links the map loader; map.c in turn pulls in
+# the gameplay modules its random-map generator uses.
 add_unity_test(test_map_picker test_map_picker.c
     ${CMAKE_SOURCE_DIR}/src/game/map_picker.c
     ${CMAKE_SOURCE_DIR}/src/game/map_list.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_thumbnail.c
+    ${CMAKE_SOURCE_DIR}/src/game/map.c
+    ${CMAKE_SOURCE_DIR}/src/game/bombs.c
+    ${CMAKE_SOURCE_DIR}/src/game/weapons.c
+    ${CMAKE_SOURCE_DIR}/src/game/player.c
+    ${CMAKE_SOURCE_DIR}/src/game/movement.c
+    ${CMAKE_SOURCE_DIR}/src/game/visibility.c
+    ${CMAKE_SOURCE_DIR}/src/game/entity.c
+    ${CMAKE_SOURCE_DIR}/src/game/map_renderer.c
+    ${CMAKE_SOURCE_DIR}/src/game/sprites.c
+    ${CMAKE_SOURCE_DIR}/src/audio/sfx.c
+    ${CMAKE_SOURCE_DIR}/src/loaders/voc_loader.c
     ${CMAKE_SOURCE_DIR}/src/loaders/spy_loader.c
     ${CMAKE_SOURCE_DIR}/src/loaders/font_loader.c
     ${CMAKE_SOURCE_DIR}/src/gfx/palette.c

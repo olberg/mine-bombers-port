@@ -880,12 +880,34 @@ void test_starting_positions_corners(void)
     }
 }
 
-/* Spawn path clearing: tiles near corners should be floor after placement.
- * Decompiled ref: seg_1010:7456-7512. */
+/* A chosen (non-random) map is not altered by placement: the original clears
+ * start corners only for the random map slot (seg_1010:7455). */
+void test_chosen_map_keeps_its_corners(void)
+{
+    Round r;
+    memset(&r, 0, sizeof(Round));
+    for (int row = 0; row < MAP_ROWS; row++)
+        for (int col = 0; col < MAP_COLS; col++)
+            r.map.tiles[row][col] = '1';
+
+    Player players[4];
+    for (int i = 0; i < 4; i++)
+        player_init_defaults(&players[i], i);
+
+    round_place_players(&r, players, 4);
+
+    for (int row = 0; row < MAP_ROWS; row++)
+        for (int col = 0; col < MAP_COLS; col++)
+            TEST_ASSERT_EQUAL_UINT8('1', r.map.tiles[row][col]);
+}
+
+/* Spawn path clearing: on a random map, tiles near corners should be floor
+ * after placement. Decompiled ref: seg_1010:7456-7512. */
 void test_spawn_path_clearing(void)
 {
     Round r;
     memset(&r, 0, sizeof(Round));
+    r.random_map = true;
 
     /* Fill interior with destructible walls */
     for (int row = 0; row < MAP_ROWS; row++)
@@ -977,5 +999,6 @@ int main(void)
     RUN_TEST(test_direction_resolution_per_player_independent);
     RUN_TEST(test_starting_positions_corners);
     RUN_TEST(test_spawn_path_clearing);
+    RUN_TEST(test_chosen_map_keeps_its_corners);
     return UNITY_END();
 }

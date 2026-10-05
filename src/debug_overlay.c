@@ -112,20 +112,20 @@ void debug_draw(const Player players[], int num_players)
             draw_panel_text(buf, x, y, fs, col);
             y += lh;
 
-            /* Intra-tile position: x_pos % 10 and (y_pos - MAP_Y_OFFSET) % 10 */
-            int intra_x = p->x_pos % 10;
-            int intra_y = (p->y_pos - MAP_Y_OFFSET) % 10;
-            if (intra_y < 0) intra_y += 10;
+            /* Tile under the sprite center, and the center's offset inside
+             * that tile exactly as player_move / player_dig compute it
+             * (5 = centered, the value their alignment checks test for). */
+            int cx = p->x_pos + SPRITE_W / 2;
+            int cy = p->y_pos + SPRITE_H / 2;
+            int prow = pixel_to_tile_row(cx);
+            int pcol = pixel_to_tile_col(cy);
+            int intra_x = cx - tile_to_pixel_x(prow);
+            int intra_y = cy - tile_to_pixel_y(pcol);
             snprintf(buf, sizeof(buf), "  Pos: (%d, %d)  Intra: (%d, %d)  Dir: %s",
                      p->x_pos, p->y_pos, intra_x, intra_y, dir_name(p->last_direction));
             draw_panel_text(buf, x, y, fs, col);
             y += lh;
 
-            /* Tile under player's center */
-            int cx = p->x_pos + SPRITE_W / 2;
-            int cy = p->y_pos + SPRITE_H / 2;
-            int prow = pixel_to_tile_row(cx);
-            int pcol = pixel_to_tile_col(cy);
             uint8_t tile = 0;
             uint16_t overlay = 0;
             if (prow >= 0 && prow < MAP_ROWS && pcol >= 0 && pcol < MAP_COLS) {
@@ -172,14 +172,18 @@ void debug_draw(const Player players[], int num_players)
         int y = 960 - (lh * 6 + 8);
         DrawRectangle(x - 2, y - 2, 360, lh * 6 + 4, (Color){0, 0, 0, 160});
 
-        snprintf(buf, sizeof(buf), "Round: %d  State: %s",
-                 g_round->round_number, round_state_name(g_round->state));
+        snprintf(buf, sizeof(buf), "Round: %d  State: %s%s",
+                 g_round->round_number, round_state_name(g_round->state),
+                 g_round->paused ? " [PAUSED]" : "");
         draw_panel_text(buf, x, y, fs, YELLOW);
         y += lh;
 
         if (g_round->time_remaining > 0) {
-            int secs = g_round->time_remaining / 60;
-            snprintf(buf, sizeof(buf), "Time: %d:%02d", secs / 60, secs % 60);
+            /* time_remaining counts PIT ticks (one tick = 65536/1193182 s),
+             * not frames. */
+            int secs = (int)((int64_t)g_round->time_remaining * 65536 / 1193182);
+            snprintf(buf, sizeof(buf), "Time: %d:%02d (%d ticks)",
+                     secs / 60, secs % 60, g_round->time_remaining);
         } else {
             snprintf(buf, sizeof(buf), "Time: unlimited");
         }

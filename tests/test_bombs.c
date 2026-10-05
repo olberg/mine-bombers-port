@@ -1,6 +1,7 @@
 #include "unity.h"
 #include "util/prng.h"
 #include "game/bombs.h"
+#include "game/entity.h"
 #include "game/weapons.h"
 #include "game/map.h"
 #include "game/map_renderer.h"
@@ -1580,9 +1581,264 @@ void test_explosion2_tile_decay_chain(void)
     TEST_ASSERT_EQUAL_UINT16(0, map.overlay[10][10]);
 }
 
+/* --- bomb_try_push (FUN_1000_5073 push branch, seg_1000:3656-3706) --- */
+
+static void push_world_reset(void)
+{
+    memset(g_players, 0, sizeof(g_players));
+    g_num_active_players = 0;
+    bombs_set_entity_list(NULL);
+}
+
+/* Place a pushable bomb at (row=20, col=20) with a distinctive fuse/owner. */
+static void push_setup_bomb(TileMap *map)
+{
+    setup_test_map(map);
+    map->tiles[20][20] = BOMB_SMALL_1;
+    map->collision[20][20] = 1;
+    map->overlay[20][20] = 77;
+    map->bomb_owner[20][20] = 2;
+}
+
+static void push_assert_untouched(const TileMap *before, const TileMap *after)
+{
+    TEST_ASSERT_EQUAL_MEMORY(before->tiles, after->tiles, sizeof(after->tiles));
+    TEST_ASSERT_EQUAL_MEMORY(before->collision, after->collision, sizeof(after->collision));
+    TEST_ASSERT_EQUAL_MEMORY(before->overlay, after->overlay, sizeof(after->overlay));
+    TEST_ASSERT_EQUAL_MEMORY(before->bomb_owner, after->bomb_owner, sizeof(after->bomb_owner));
+}
+
+void test_push_all_directions(void)
+{
+    /* Map is transposed: tiles[row][col], row = screen X, col = screen Y.
+     * RIGHT/LEFT change row; UP/DOWN change col. */
+    static const struct { uint8_t dir; int drow, dcol; } cases[] = {
+        { DIR_RIGHT, +1,  0 },
+        { DIR_LEFT,  -1,  0 },
+        { DIR_UP,     0, -1 },
+        { DIR_DOWN,   0, +1 },
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        TileMap map;
+        push_world_reset();
+        push_setup_bomb(&map);
+
+        TEST_ASSERT_TRUE(bomb_try_push(&map, 20, 20, cases[i].dir));
+
+        int dr = 20 + cases[i].drow, dc = 20 + cases[i].dcol;
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(BOMB_SMALL_1, map.tiles[dr][dc], "dest tile");
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(24, map.collision[dr][dc], "dest collision");
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(77, map.overlay[dr][dc], "fuse carried");
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(2, map.bomb_owner[dr][dc], "owner carried");
+
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE('0', map.tiles[20][20], "source tile");
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(0, map.collision[20][20], "source collision");
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(0, map.overlay[20][20], "source overlay");
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(0xFF, map.bomb_owner[20][20], "source owner");
+    }
+}
+
+void test_push_onto_each_open_floor_tile(void)
+{
+    static const uint8_t floors[] = { '0', 'f', 0xAF };
+
+    for (size_t i = 0; i < sizeof(floors); i++) {
+        TileMap map;
+        push_world_reset();
+        push_setup_bomb(&map);
+        map.tiles[21][20] = floors[i];
+
+        TEST_ASSERT_TRUE(bomb_try_push(&map, 20, 20, DIR_RIGHT));
+        TEST_ASSERT_EQUAL_UINT8(BOMB_SMALL_1, map.tiles[21][20]);
+        TEST_ASSERT_EQUAL_UINT16(BOMB_COLLISION_PUSHED, map.collision[21][20]);
+        TEST_ASSERT_EQUAL_UINT8('0', map.tiles[20][20]);
+    }
+}
+
+void test_push_refused_by_non_floor_destination(void)
+{
+    /* Wall, indestructible wall, another bomb, treasure, explosion fire */
+    static const uint8_t blockers[] = { '7', '1', BOMB_SMALL_1, 0x9A, TILE_EXPLOSION };
+
+    for (size_t i = 0; i < sizeof(blockers); i++) {
+        TileMap map, before;
+        push_world_reset();
+        push_setup_bomb(&map);
+        map.tiles[20][21] = blockers[i];
+        map.collision[20][21] = 50;
+        before = map;
+
+        TEST_ASSERT_FALSE(bomb_try_push(&map, 20, 20, DIR_DOWN));
+        push_assert_untouched(&before, &map);
+    }
+}
+
+void test_push_refused_at_map_edges(void)
+{
+    static const struct { int row, col; uint8_t dir; } cases[] = {
+        { 0,            10,           DIR_LEFT  },
+        { MAP_ROWS - 1, 10,           DIR_RIGHT },
+        { 10,           0,            DIR_UP    },
+        { 10,           MAP_COLS - 1, DIR_DOWN  },
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        TileMap map, before;
+        push_world_reset();
+        setup_test_map(&map);
+        map.tiles[cases[i].row][cases[i].col] = BOMB_SMALL_1;
+        map.collision[cases[i].row][cases[i].col] = 1;
+        map.overlay[cases[i].row][cases[i].col] = 77;
+        map.bomb_owner[cases[i].row][cases[i].col] = 2;
+        before = map;
+
+        TEST_ASSERT_FALSE(bomb_try_push(&map, cases[i].col, cases[i].row, cases[i].dir));
+        push_assert_untouched(&before, &map);
+    }
+}
+
+void test_push_refused_by_invalid_direction(void)
+{
+    static const uint8_t dirs[] = { DIR_STOP, 5, 99, 0xFF };
+
+    for (size_t i = 0; i < sizeof(dirs); i++) {
+        TileMap map, before;
+        push_world_reset();
+        push_setup_bomb(&map);
+        before = map;
+
+        TEST_ASSERT_FALSE(bomb_try_push(&map, 20, 20, dirs[i]));
+        push_assert_untouched(&before, &map);
+    }
+}
+
+void test_push_refused_by_live_player_at_destination(void)
+{
+    TileMap map, before;
+    push_world_reset();
+    push_setup_bomb(&map);
+
+    /* Player standing on (row=21, col=20), the RIGHT neighbor */
+    g_num_active_players = 1;
+    player_init_defaults(&g_players[0], 0);
+    g_players[0].x_pos = (int16_t)tile_to_pixel_x(21);
+    g_players[0].y_pos = (int16_t)tile_to_pixel_y(20);
+    before = map;
+
+    TEST_ASSERT_FALSE(bomb_try_push(&map, 20, 20, DIR_RIGHT));
+    push_assert_untouched(&before, &map);
+
+    /* A different direction is still free */
+    TEST_ASSERT_TRUE(bomb_try_push(&map, 20, 20, DIR_LEFT));
+    TEST_ASSERT_EQUAL_UINT8(BOMB_SMALL_1, map.tiles[19][20]);
+
+    push_world_reset();
+}
+
+void test_push_ignores_dead_or_inactive_player_at_destination(void)
+{
+    TileMap map;
+    push_world_reset();
+    push_setup_bomb(&map);
+
+    g_num_active_players = 2;
+    player_init_defaults(&g_players[0], 0);
+    g_players[0].x_pos = (int16_t)tile_to_pixel_x(21);
+    g_players[0].y_pos = (int16_t)tile_to_pixel_y(20);
+    g_players[0].dead = 1;
+    player_init_defaults(&g_players[1], 1);
+    g_players[1].x_pos = (int16_t)tile_to_pixel_x(21);
+    g_players[1].y_pos = (int16_t)tile_to_pixel_y(20);
+    g_players[1].active = 0;
+
+    TEST_ASSERT_TRUE(bomb_try_push(&map, 20, 20, DIR_RIGHT));
+    TEST_ASSERT_EQUAL_UINT8(BOMB_SMALL_1, map.tiles[21][20]);
+
+    push_world_reset();
+}
+
+void test_push_refused_by_live_entity_at_destination(void)
+{
+    TileMap map, before;
+    Entity e;
+    push_world_reset();
+    push_setup_bomb(&map);
+
+    memset(&e, 0, sizeof(e));
+    e.x_pos = (int16_t)tile_to_pixel_x(20);   /* row 20 */
+    e.y_pos = (int16_t)tile_to_pixel_y(21);   /* col 21: DOWN neighbor */
+    e.dead = 0;
+    e.next = NULL;
+    bombs_set_entity_list(&e);
+    before = map;
+
+    TEST_ASSERT_FALSE(bomb_try_push(&map, 20, 20, DIR_DOWN));
+    push_assert_untouched(&before, &map);
+
+    /* Entity on a different tile does not block */
+    TEST_ASSERT_TRUE(bomb_try_push(&map, 20, 20, DIR_UP));
+    TEST_ASSERT_EQUAL_UINT8(BOMB_SMALL_1, map.tiles[20][19]);
+
+    push_world_reset();
+}
+
+void test_push_ignores_dead_entity_at_destination(void)
+{
+    TileMap map;
+    Entity e;
+    push_world_reset();
+    push_setup_bomb(&map);
+
+    memset(&e, 0, sizeof(e));
+    e.x_pos = (int16_t)tile_to_pixel_x(20);
+    e.y_pos = (int16_t)tile_to_pixel_y(21);
+    e.dead = 1;
+    e.next = NULL;
+    bombs_set_entity_list(&e);
+
+    TEST_ASSERT_TRUE(bomb_try_push(&map, 20, 20, DIR_DOWN));
+    TEST_ASSERT_EQUAL_UINT8(BOMB_SMALL_1, map.tiles[20][21]);
+
+    push_world_reset();
+}
+
+void test_push_refused_by_entity_later_in_list(void)
+{
+    TileMap map, before;
+    Entity far_e, near_e;
+    push_world_reset();
+    push_setup_bomb(&map);
+
+    memset(&far_e, 0, sizeof(far_e));
+    far_e.x_pos = (int16_t)tile_to_pixel_x(5);
+    far_e.y_pos = (int16_t)tile_to_pixel_y(5);
+    memset(&near_e, 0, sizeof(near_e));
+    near_e.x_pos = (int16_t)tile_to_pixel_x(19);   /* LEFT neighbor */
+    near_e.y_pos = (int16_t)tile_to_pixel_y(20);
+    far_e.next = &near_e;
+    bombs_set_entity_list(&far_e);
+    before = map;
+
+    TEST_ASSERT_FALSE(bomb_try_push(&map, 20, 20, DIR_LEFT));
+    push_assert_untouched(&before, &map);
+
+    push_world_reset();
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_push_all_directions);
+    RUN_TEST(test_push_onto_each_open_floor_tile);
+    RUN_TEST(test_push_refused_by_non_floor_destination);
+    RUN_TEST(test_push_refused_at_map_edges);
+    RUN_TEST(test_push_refused_by_invalid_direction);
+    RUN_TEST(test_push_refused_by_live_player_at_destination);
+    RUN_TEST(test_push_ignores_dead_or_inactive_player_at_destination);
+    RUN_TEST(test_push_refused_by_live_entity_at_destination);
+    RUN_TEST(test_push_ignores_dead_entity_at_destination);
+    RUN_TEST(test_push_refused_by_entity_later_in_list);
     RUN_TEST(test_place_bomb);
     RUN_TEST(test_place_bomb_no_ammo);
     RUN_TEST(test_place_bomb_occupied_tile);

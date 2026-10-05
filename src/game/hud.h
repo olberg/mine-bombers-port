@@ -4,10 +4,11 @@
 #include "game/player.h"
 #include "game/map.h"
 #include <stdbool.h>
+#include <stddef.h>
 
 /*
  * In-game HUD: per-player status panels at the top of the screen,
- * plus score display, timer bar, and optional minimap.
+ * plus score display and timer bar.
  *
  * Panel X positions (from decompiled draw_player_status_panels):
  *   Player 1: X=12, Player 2: X=174, Player 3: X=337, Player 4: X=500
@@ -49,6 +50,11 @@
 /* Text color palette indices */
 #define HUD_TEXT_COLOR       1
 #define HUD_TEXT_HIGHLIGHT   3
+#define HUD_DIG_COLOR        3   /* draw_score_displays: set_draw_color(3), red */
+#define HUD_MONEY_COLOR      5   /* draw_points_displays: set_draw_color(5), yellow */
+
+/* The name line shows at most 10 characters (FUN_1010_6030, seg_1010:3340). */
+#define HUD_NAME_CHARS      10
 
 /* Lives display (single-player).
  * Decompiled FUN_1000_4667 (seg_1000:2874-2903): draws up to 3 life icons.
@@ -122,18 +128,12 @@ void hud_draw_timer(int time_remaining, int time_total);
 /* Clean up HUD resources. */
 void hud_cleanup(void);
 
+/* Build the name line shown in a panel: the runtime name has a "N " player
+ * number prefix, FUN_1010_6030 blanks its first character and shows at most
+ * HUD_NAME_CHARS characters. */
+void hud_format_name(char *dst, size_t dst_size, const char *name);
+
 /* Get panel X position for a player index (0-3). */
 int hud_panel_x(int player_idx);
-
-/* Minimap: scaled-down overview of the tile map (1 pixel per tile).
- * Position from decompiled FUN_1010_b227 call: base_x=0x120 (288), base_y=0x33 (51).
- * Tile-to-color mapping from FUN_1010_dab7 (seg_1010:8150-8199). */
-#define MINIMAP_X  288   /* 0x120 */
-#define MINIMAP_Y   51   /* 0x33 */
-
-/* Draw the minimap overlay. Shows each tile as a single colored pixel.
- * Also marks player positions. No camera offset — fixed viewport. */
-void hud_draw_minimap(const TileMap *map, const Player players[],
-                      int num_players);
 
 #endif

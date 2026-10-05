@@ -83,52 +83,76 @@ Image LoadPCX(const char *path)
         memcpy(palette, hdr.ega_palette, 48);
     }
 
-    /* Decode RLE pixel data */
+    /* Decode RLE pixel data row by row, as the original does (FUN_1010_73bd,
+     * seg_1010:4462-4490). It draws a run as a line from x to x + count with
+     * both ends included, one pixel more than the run is long. The next
+     * element overwrites that extra pixel, except after the last run of a
+     * row, where it lands just right of the image. The decoded image keeps
+     * those pixels in one extra column (out_w = w + 1), left transparent on
+     * rows that end in a single pixel.
+     * Buffers are zeroed: a truncated file leaves the tail undecoded. */
     fseek(f, 128, SEEK_SET);
-    int total_pixels = w * h;
-    uint8_t *indexed = (uint8_t *)malloc(total_pixels);
-    if (!indexed) {
+    int out_w = w + 1;
+    uint8_t *indexed = (uint8_t *)calloc(out_w * h, 1);
+    uint8_t *spilled = (uint8_t *)calloc(h, 1);
+    if (!indexed || !spilled) {
+        free(indexed);
+        free(spilled);
         fclose(f);
         return img;
     }
 
-    int decoded = 0;
-    while (decoded < total_pixels) {
-        int byte = fgetc(f);
-        if (byte == EOF) break;
+    bool truncated = false;
+    for (int y = 0; y < h && !truncated; y++) {
+        uint8_t *row = indexed + y * out_w;
+        int x = 0;
+        while (x < w) {
+            int byte = fgetc(f);
+            if (byte == EOF) { truncated = true; break; }
 
-        if ((byte & 0xC0) == 0xC0) {
-            int count = byte & 0x3F;
-            int value = fgetc(f);
-            if (value == EOF) break;
-            for (int i = 0; i < count && decoded < total_pixels; i++) {
-                indexed[decoded++] = (uint8_t)value;
+            if ((byte & 0xC0) == 0xC0) {
+                int count = byte & 0x3F;
+                int value = fgetc(f);
+                if (value == EOF) { truncated = true; break; }
+                for (int i = 0; i <= count && x + i <= w; i++) {
+                    row[x + i] = (uint8_t)value;
+                }
+                if (x + count >= w) spilled[y] = 1;
+                x += count;
+            } else {
+                row[x++] = (uint8_t)byte;
             }
-        } else {
-            indexed[decoded++] = (uint8_t)byte;
         }
     }
     fclose(f);
 
     /* Convert indexed to RGBA */
-    uint8_t *rgba = (uint8_t *)malloc(w * h * 4);
+    uint8_t *rgba = (uint8_t *)calloc(out_w * h, 4);
     if (!rgba) {
         free(indexed);
+        free(spilled);
         return img;
     }
 
-    for (int i = 0; i < w * h; i++) {
-        uint8_t idx = indexed[i];
+    for (int i = 0; i < out_w * h; i++) {
+        if (i % out_w == w && !spilled[i / out_w]) continue;
+        /* The game runs in a 16-colour planar mode: the original's pixel
+         * and run writes (FUN_1028_1f61 / FUN_1028_1bfc via FUN_1010_73bd)
+         * keep only the low four bits of each index, so the portraits'
+         * index 255 (near-white in the file palette) shows as colour 15
+         * (skin). */
+        uint8_t idx = indexed[i] & 0x0F;
         rgba[i * 4 + 0] = palette[idx * 3 + 0];
         rgba[i * 4 + 1] = palette[idx * 3 + 1];
         rgba[i * 4 + 2] = palette[idx * 3 + 2];
-        rgba[i * 4 + 3] = 255;  /* all opaque (original renders without transparency) */
+        rgba[i * 4 + 3] = 255;  /* opaque (original renders without transparency) */
     }
 
     free(indexed);
+    free(spilled);
 
     img.data = rgba;
-    img.width = w;
+    img.width = out_w;
     img.height = h;
     img.mipmaps = 1;
     img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;

@@ -19,6 +19,24 @@ void visibility_init(TileMap *map)
             map->layer4[row][col] |= VIS_HIDDEN_BIT;
         }
     }
+    visibility_snapshot(map);
+}
+
+void visibility_snapshot(TileMap *map)
+{
+    memcpy(map->seen_tiles, map->tiles, sizeof(map->seen_tiles));
+}
+
+void visibility_reveal_changed(TileMap *map)
+{
+    for (int row = 0; row < MAP_ROWS; row++) {
+        for (int col = 0; col < MAP_COLS; col++) {
+            if (map->tiles[row][col] != map->seen_tiles[row][col]) {
+                map->seen_tiles[row][col] = map->tiles[row][col];
+                map->layer4[row][col] &= ~VIS_HIDDEN_BIT;
+            }
+        }
+    }
 }
 
 bool visibility_is_revealed(const TileMap *map, int row, int col)

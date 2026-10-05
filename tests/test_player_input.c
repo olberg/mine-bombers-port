@@ -134,6 +134,79 @@ void test_four_player_simultaneous_independence(void)
     player_input_inject_mode(false);
 }
 
+/* player_input_edge is the press edge WITHOUT OS typematic; in injection mode
+ * it reflects the injected press flag only, independent of the down flag. */
+void test_edge_reflects_injected_press(void)
+{
+    player_input_inject_mode(true);
+
+    player_input_inject(0, PLAYER_INPUT_BOMB, false, true);
+    TEST_ASSERT_TRUE(player_input_edge(0, PLAYER_INPUT_BOMB));
+    TEST_ASSERT_FALSE(player_input_down(0, PLAYER_INPUT_BOMB));
+
+    player_input_inject(0, PLAYER_INPUT_BOMB, true, false);
+    TEST_ASSERT_FALSE(player_input_edge(0, PLAYER_INPUT_BOMB));
+    TEST_ASSERT_TRUE(player_input_down(0, PLAYER_INPUT_BOMB));
+
+    player_input_inject(0, PLAYER_INPUT_BOMB, true, true);
+    TEST_ASSERT_TRUE(player_input_edge(0, PLAYER_INPUT_BOMB));
+
+    /* Per-player, per-action: no crosstalk */
+    TEST_ASSERT_FALSE(player_input_edge(1, PLAYER_INPUT_BOMB));
+    TEST_ASSERT_FALSE(player_input_edge(0, PLAYER_INPUT_CYCLE));
+
+    /* In injection mode edge and pressed agree */
+    for (int p = 0; p < 4; p++) {
+        for (int a = 0; a < PLAYER_INPUT_COUNT; a++) {
+            TEST_ASSERT_EQUAL(player_input_pressed(p, a),
+                              player_input_edge(p, a));
+        }
+    }
+
+    player_input_inject_mode(false);
+}
+
+void test_edge_out_of_range_is_false(void)
+{
+    player_input_inject_mode(true);
+    player_input_inject(0, PLAYER_INPUT_BOMB, true, true);
+
+    TEST_ASSERT_FALSE(player_input_edge(-1, PLAYER_INPUT_BOMB));
+    TEST_ASSERT_FALSE(player_input_edge(4, PLAYER_INPUT_BOMB));
+    TEST_ASSERT_FALSE(player_input_edge(0, (PlayerInputAction)-1));
+    TEST_ASSERT_FALSE(player_input_edge(0, PLAYER_INPUT_COUNT));
+
+    /* Injecting out of range must not corrupt in-range state */
+    player_input_inject(-1, PLAYER_INPUT_BOMB, true, true);
+    player_input_inject(0, PLAYER_INPUT_COUNT, true, true);
+    TEST_ASSERT_TRUE(player_input_edge(0, PLAYER_INPUT_BOMB));
+
+    player_input_inject_mode(false);
+}
+
+void test_edge_cleared_by_inject_clear_and_mode_toggle(void)
+{
+    player_input_inject_mode(true);
+    player_input_inject(0, PLAYER_INPUT_BOMB, true, true);
+    player_input_inject(1, PLAYER_INPUT_BOMB, true, true);
+    TEST_ASSERT_TRUE(player_input_edge(0, PLAYER_INPUT_BOMB));
+
+    player_input_inject_clear(0);
+    TEST_ASSERT_FALSE(player_input_edge(0, PLAYER_INPUT_BOMB));
+    TEST_ASSERT_TRUE(player_input_edge(1, PLAYER_INPUT_BOMB));
+
+    /* Toggling the mode wipes every player's injected state */
+    player_input_inject_mode(true);
+    TEST_ASSERT_FALSE(player_input_edge(1, PLAYER_INPUT_BOMB));
+
+    player_input_inject(2, PLAYER_INPUT_CYCLE, false, true);
+    player_input_inject_mode(false);
+    player_input_inject_mode(true);
+    TEST_ASSERT_FALSE(player_input_edge(2, PLAYER_INPUT_CYCLE));
+
+    player_input_inject_mode(false);
+}
+
 void test_set_custom_key(void)
 {
     player_input_set_key(0, PLAYER_INPUT_BOMB, KEY_SPACE);
@@ -244,6 +317,9 @@ int main(void)
     RUN_TEST(test_default_bindings_type);
     RUN_TEST(test_no_key_conflicts);
     RUN_TEST(test_four_player_simultaneous_independence);
+    RUN_TEST(test_edge_reflects_injected_press);
+    RUN_TEST(test_edge_out_of_range_is_false);
+    RUN_TEST(test_edge_cleared_by_inject_clear_and_mode_toggle);
     RUN_TEST(test_set_custom_key);
     RUN_TEST(test_set_gamepad_binding);
     RUN_TEST(test_binding_name_keyboard);

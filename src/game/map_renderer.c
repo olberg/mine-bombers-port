@@ -4,12 +4,10 @@
 #include <stddef.h>
 
 static const TileMap *current_map = NULL;
-static bool darkness_mode = false;
 
 void map_renderer_init(void)
 {
     current_map = NULL;
-    darkness_mode = false;
 }
 
 void map_renderer_set_map(const TileMap *map)
@@ -17,9 +15,17 @@ void map_renderer_set_map(const TileMap *map)
     current_map = map;
 }
 
-void map_renderer_set_darkness(bool enabled)
+/* Fog of war: with darkness on, only revealed tiles (layer4 bit 0 clear) are
+ * drawn; hidden ones render black (seg_1010:670-672).  The outer ring of
+ * tiles (rows 0 and 63, columns 0 and 44) is always drawn: redraw_game_screen
+ * paints it directly when darkness is on (FUN_1010_97b5, seg_1010:5279-5340). */
+bool map_renderer_tile_hidden(const TileMap *map, int row, int col)
 {
-    darkness_mode = enabled;
+    if (!map->darkness_enabled)
+        return false;
+    if (row == 0 || row == MAP_ROWS - 1 || col == 0 || col == MAP_COLS - 1)
+        return false;
+    return (map->layer4[row][col] & 0x01) != 0;
 }
 
 /* Draw the map.  The original VGA convention (confirmed via draw_map_tile →
@@ -37,7 +43,7 @@ void map_renderer_draw(int y_offset)
             int px = row * TILE_SIZE;
             int py = col * TILE_SIZE + MAP_Y_OFFSET + y_offset;
 
-            if (darkness_mode && (current_map->layer4[row][col] & 0x01)) {
+            if (map_renderer_tile_hidden(current_map, row, col)) {
                 DrawRectangle(px, py, TILE_SIZE, TILE_SIZE, BLACK);
                 continue;
             }
@@ -83,5 +89,4 @@ int tile_to_pixel_y(int col)
 void map_renderer_cleanup(void)
 {
     current_map = NULL;
-    darkness_mode = false;
 }

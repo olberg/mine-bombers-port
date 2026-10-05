@@ -1,5 +1,6 @@
 #include "unity.h"
 #include "game/movement.h"
+#include "game/bombs.h"
 #include "game/player.h"
 #include "game/map.h"
 #include "game/map_renderer.h"
@@ -365,8 +366,10 @@ void test_dig_hp1_wall_destroys(void)
     /* Wall with HP=1 must be destroyed on any dig hit.
      * Original (seg_1000:3712-3719) treats hp < 2 as DESTROY.
      * Port guard: hp == 0 → skip (already floor); hp == 1 → falls through
-     * to damage >= hp check, which destroys since damage >= 1 always. */
-    map.tiles[5][4] = 'B';
+     * to damage >= hp check, which destroys since damage >= 1 always.
+     * (Uses '7', a wall-set tile: 'B' is not in the dig wall set and takes
+     * the bomb push path instead.) */
+    map.tiles[5][4] = '7';
     map.collision[5][4] = 1;
 
     p.x_pos = tile_to_pixel_x(5);
@@ -698,9 +701,211 @@ void test_dig_works_after_round_reset(void)
     TEST_ASSERT_EQUAL_HEX8('8', map.tiles[5][4]);  /* not yet degraded */
 }
 
+/* --- Digging a non-wall blocker (placed bomb) takes the push path
+ *     (FUN_1000_5073, seg_1000:3656-3706), not the wall dig/degrade path --- */
+
+/* Player at row 5 / col 5 facing UP, so the dig target is tiles[5][4]. */
+static void setup_pusher(uint8_t dir, int16_t power)
+{
+    p.x_pos = tile_to_pixel_x(5);
+    p.y_pos = tile_to_pixel_y(5);
+    p.direction = dir;
+    p.digging_power = power;
+    p.bonus_stat = 0;
+}
+
+void test_dig_bomb_drains_collision_but_rests_at_one(void)
+{
+    map.tiles[5][4] = BOMB_SMALL_1;
+    map.collision[5][4] = 20;
+    map.overlay[5][4] = 100;
+    setup_pusher(DIR_UP, 15);
+
+    player_dig(&p, &map);
+    TEST_ASSERT_EQUAL_UINT16(5, map.collision[5][4]);
+    TEST_ASSERT_EQUAL_HEX8(BOMB_SMALL_1, map.tiles[5][4]);  /* no degradation */
+    TEST_ASSERT_EQUAL_UINT16(100, map.overlay[5][4]);
+
+    /* damage (15) >= remaining hp (5): clamps to 1, never 0, tile kept */
+    player_dig(&p, &map);
+    TEST_ASSERT_EQUAL_UINT16(1, map.collision[5][4]);
+    TEST_ASSERT_EQUAL_HEX8(BOMB_SMALL_1, map.tiles[5][4]);
+    TEST_ASSERT_EQUAL_HEX8('0', map.tiles[5][3]);  /* not pushed yet */
+}
+
+void test_dig_bomb_huge_damage_clamps_to_one(void)
+{
+    map.tiles[5][4] = BOMB_SMALL_1;
+    map.collision[5][4] = 20;
+    setup_pusher(DIR_UP, 500);
+
+    player_dig(&p, &map);
+
+    TEST_ASSERT_EQUAL_UINT16(1, map.collision[5][4]);
+    TEST_ASSERT_EQUAL_HEX8(BOMB_SMALL_1, map.tiles[5][4]);
+}
+
+void test_dig_bomb_never_cleared_by_repeated_digs(void)
+{
+    /* Dest is blocked so the bomb can never slide: it must stay put at 1. */
+    map.tiles[5][4] = BOMB_SMALL_1;
+    map.collision[5][4] = 20;
+    map.tiles[5][3] = '7';
+    map.collision[5][3] = 1227;
+    setup_pusher(DIR_UP, 15);
+
+    for (int i = 0; i < 10; i++) player_dig(&p, &map);
+
+    TEST_ASSERT_EQUAL_HEX8(BOMB_SMALL_1, map.tiles[5][4]);
+    TEST_ASSERT_EQUAL_UINT16(1, map.collision[5][4]);
+    TEST_ASSERT_EQUAL_HEX8('7', map.tiles[5][3]);
+    TEST_ASSERT_EQUAL_UINT16(1227, map.collision[5][3]);
+}
+
+void test_dig_bomb_at_collision_one_pushes_one_tile(void)
+{
+    map.tiles[5][4] = BOMB_SMALL_1;
+    map.collision[5][4] = 1;
+    map.overlay[5][4] = 77;
+    map.bomb_owner[5][4] = 3;
+    setup_pusher(DIR_UP, 1);
+
+    player_dig(&p, &map);
+
+    /* DIR_UP: col-1, so the bomb slides from [5][4] to [5][3] */
+    TEST_ASSERT_EQUAL_HEX8(BOMB_SMALL_1, map.tiles[5][3]);
+    TEST_ASSERT_EQUAL_UINT16(BOMB_COLLISION_PUSHED, map.collision[5][3]);
+    TEST_ASSERT_EQUAL_UINT16(77, map.overlay[5][3]);
+    TEST_ASSERT_EQUAL_UINT8(3, map.bomb_owner[5][3]);
+    TEST_ASSERT_EQUAL_HEX8('0', map.tiles[5][4]);
+    TEST_ASSERT_EQUAL_UINT16(0, map.collision[5][4]);
+    TEST_ASSERT_EQUAL_UINT16(0, map.overlay[5][4]);
+}
+
+void test_dig_bomb_full_sequence_drain_then_push(void)
+{
+    map.tiles[5][4] = BOMB_SMALL_1;
+    map.collision[5][4] = 20;
+    setup_pusher(DIR_UP, 10);
+
+    player_dig(&p, &map);   /* 20 -> 10 */
+    player_dig(&p, &map);   /* 10 -> 1 (clamped) */
+    TEST_ASSERT_EQUAL_UINT16(1, map.collision[5][4]);
+    TEST_ASSERT_EQUAL_HEX8(BOMB_SMALL_1, map.tiles[5][4]);
+
+    player_dig(&p, &map);   /* hp < 2: push */
+    TEST_ASSERT_EQUAL_HEX8('0', map.tiles[5][4]);
+    TEST_ASSERT_EQUAL_HEX8(BOMB_SMALL_1, map.tiles[5][3]);
+    TEST_ASSERT_EQUAL_UINT16(BOMB_COLLISION_PUSHED, map.collision[5][3]);
+}
+
+void test_dig_bomb_push_follows_player_direction(void)
+{
+    /* Player at row 5 / col 5. Targets: LEFT [4][5], RIGHT [6][5],
+     * UP [5][4], DOWN [5][6]; each slides one further in the same direction. */
+    static const struct {
+        uint8_t dir;
+        int trow, tcol;   /* bomb tile */
+        int drow, dcol;   /* expected destination */
+    } cases[] = {
+        { DIR_LEFT,  4, 5, 3, 5 },
+        { DIR_RIGHT, 6, 5, 7, 5 },
+        { DIR_UP,    5, 4, 5, 3 },
+        { DIR_DOWN,  5, 6, 5, 7 },
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        setUp();
+        map.tiles[cases[i].trow][cases[i].tcol] = BOMB_SMALL_1;
+        map.collision[cases[i].trow][cases[i].tcol] = 1;
+        setup_pusher(cases[i].dir, 1);
+
+        player_dig(&p, &map);
+
+        TEST_ASSERT_EQUAL_HEX8_MESSAGE('0', map.tiles[cases[i].trow][cases[i].tcol], "source");
+        TEST_ASSERT_EQUAL_HEX8_MESSAGE(BOMB_SMALL_1, map.tiles[cases[i].drow][cases[i].dcol], "dest");
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(BOMB_COLLISION_PUSHED,
+                                         map.collision[cases[i].drow][cases[i].dcol], "dest collision");
+    }
+}
+
+void test_dig_bomb_push_blocked_leaves_everything(void)
+{
+    map.tiles[5][4] = BOMB_SMALL_1;
+    map.collision[5][4] = 1;
+    map.overlay[5][4] = 77;
+    map.tiles[5][3] = BOMB_MEDIUM_1;   /* another bomb in the way */
+    map.collision[5][3] = 20;
+    setup_pusher(DIR_UP, 1);
+
+    player_dig(&p, &map);
+
+    TEST_ASSERT_EQUAL_HEX8(BOMB_SMALL_1, map.tiles[5][4]);
+    TEST_ASSERT_EQUAL_UINT16(1, map.collision[5][4]);
+    TEST_ASSERT_EQUAL_UINT16(77, map.overlay[5][4]);
+    TEST_ASSERT_EQUAL_HEX8(BOMB_MEDIUM_1, map.tiles[5][3]);
+    TEST_ASSERT_EQUAL_UINT16(20, map.collision[5][3]);
+}
+
+void test_dig_boulder_b_takes_push_path(void)
+{
+    /* 'B' (0x42) is deliberately NOT in the original's dig wall set. */
+    map.tiles[5][4] = 'B';
+    map.collision[5][4] = 100;
+    setup_pusher(DIR_UP, 10);
+
+    player_dig(&p, &map);
+
+    TEST_ASSERT_EQUAL_HEX8('B', map.tiles[5][4]);
+    TEST_ASSERT_EQUAL_UINT16(90, map.collision[5][4]);
+}
+
+void test_dig_wall_set_tiles_take_normal_dig_path(void)
+{
+    /* Wall-set members never push, even with collision 1: they are destroyed. */
+    static const uint8_t walls[] = { '7', '9', 'A', 'C', 'F', 'o', 'q', 0x9B, 0xA0, 0xAC, 0xAE };
+
+    for (size_t i = 0; i < sizeof(walls); i++) {
+        setUp();
+        map.tiles[5][4] = walls[i];
+        map.collision[5][4] = 1;
+        setup_pusher(DIR_UP, 1);
+
+        player_dig(&p, &map);
+
+        TEST_ASSERT_EQUAL_HEX8_MESSAGE('0', map.tiles[5][4], "wall destroyed");
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(0, map.collision[5][4], "collision cleared");
+        TEST_ASSERT_EQUAL_HEX8_MESSAGE('0', map.tiles[5][3], "nothing pushed");
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(0, map.collision[5][3], "no pushed collision");
+    }
+}
+
+void test_dig_wall_set_tile_with_hp_can_reach_zero(void)
+{
+    /* Contrast with bombs: wall hp is cleared, not clamped to 1. */
+    map.tiles[5][4] = '7';
+    map.collision[5][4] = 20;
+    setup_pusher(DIR_UP, 50);
+
+    player_dig(&p, &map);
+
+    TEST_ASSERT_EQUAL_UINT16(0, map.collision[5][4]);
+    TEST_ASSERT_EQUAL_HEX8('0', map.tiles[5][4]);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_dig_bomb_drains_collision_but_rests_at_one);
+    RUN_TEST(test_dig_bomb_huge_damage_clamps_to_one);
+    RUN_TEST(test_dig_bomb_never_cleared_by_repeated_digs);
+    RUN_TEST(test_dig_bomb_at_collision_one_pushes_one_tile);
+    RUN_TEST(test_dig_bomb_full_sequence_drain_then_push);
+    RUN_TEST(test_dig_bomb_push_follows_player_direction);
+    RUN_TEST(test_dig_bomb_push_blocked_leaves_everything);
+    RUN_TEST(test_dig_boulder_b_takes_push_path);
+    RUN_TEST(test_dig_wall_set_tiles_take_normal_dig_path);
+    RUN_TEST(test_dig_wall_set_tile_with_hp_can_reach_zero);
     RUN_TEST(test_passable_tiles);
     RUN_TEST(test_wall_blocks);
     RUN_TEST(test_move_on_open_floor);

@@ -236,6 +236,61 @@ void test_visibility_multiplayer_union(void)
     TEST_ASSERT_FALSE(visibility_is_revealed(&map, 60, 5));
 }
 
+/* Test: a tile whose contents change while dark is revealed; the rest stay hidden */
+void test_visibility_reveal_changed_reveals_only_changed_tiles(void)
+{
+    TileMap map;
+    init_floor_map(&map);
+    visibility_init(&map);
+
+    visibility_reveal_changed(&map);
+    TEST_ASSERT_FALSE_MESSAGE(visibility_is_revealed(&map, 10, 10),
+        "Nothing changed, so nothing is revealed");
+
+    map.tiles[10][10] = 0x84;   /* explosion */
+    map.tiles[30][20] = 'W';    /* bomb placed */
+    visibility_reveal_changed(&map);
+
+    TEST_ASSERT_TRUE(visibility_is_revealed(&map, 10, 10));
+    TEST_ASSERT_TRUE(visibility_is_revealed(&map, 30, 20));
+    TEST_ASSERT_FALSE(visibility_is_revealed(&map, 10, 11));
+    TEST_ASSERT_FALSE(visibility_is_revealed(&map, 31, 20));
+}
+
+/* Test: a change is reported once; later changes to the same tile reveal again */
+void test_visibility_reveal_changed_tracks_latest_contents(void)
+{
+    TileMap map;
+    init_floor_map(&map);
+    visibility_init(&map);
+
+    map.tiles[5][5] = 0x84;
+    visibility_reveal_changed(&map);
+    map.layer4[5][5] |= 0x01;   /* hide it again by hand */
+
+    visibility_reveal_changed(&map);
+    TEST_ASSERT_FALSE_MESSAGE(visibility_is_revealed(&map, 5, 5),
+        "An unchanged tile is not revealed again");
+
+    map.tiles[5][5] = 0x61;     /* next decay stage */
+    visibility_reveal_changed(&map);
+    TEST_ASSERT_TRUE(visibility_is_revealed(&map, 5, 5));
+}
+
+/* Test: revealing changed tiles keeps the other layer4 bits */
+void test_visibility_reveal_changed_preserves_other_bits(void)
+{
+    TileMap map;
+    init_floor_map(&map);
+    map.layer4[7][7] = 0x02;    /* shop gate marker */
+    visibility_init(&map);
+
+    map.tiles[7][7] = 'f';
+    visibility_reveal_changed(&map);
+
+    TEST_ASSERT_EQUAL_HEX8(0x02, map.layer4[7][7]);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -250,5 +305,8 @@ int main(void)
     RUN_TEST(test_visibility_dead_player_no_reveal);
     RUN_TEST(test_visibility_stopped_player_no_reveal);
     RUN_TEST(test_visibility_multiplayer_union);
+    RUN_TEST(test_visibility_reveal_changed_reveals_only_changed_tiles);
+    RUN_TEST(test_visibility_reveal_changed_tracks_latest_contents);
+    RUN_TEST(test_visibility_reveal_changed_preserves_other_bits);
     return UNITY_END();
 }

@@ -15,7 +15,7 @@
  *
  * Display: one concatenated string per line at X=0x7F (127),
  *   Y = rank*10 + 0xA9 (169) for rank 1..10.
- *   Format: "rank  name                  Level N  Money NNNNN"
+ *   Format: "N.  name(21)  Level N  Money N", every row incl. empty ones
  */
 
 #include "game/hall_of_fame.h"
@@ -54,7 +54,6 @@ static BitmapFont font;
 /* Data: 11 slots (10 existing + 1 candidate). After sort, only top 10 are kept. */
 #define HOF_SORT_SLOTS  (HOF_ENTRIES + 1)
 static HofEntry entries[HOF_SORT_SLOTS];
-static int new_entry_index;  /* -1 if player didn't qualify */
 static HofState state;
 
 /* --- File I/O --- */
@@ -165,8 +164,6 @@ void hof_init(const char *player_name, int level_reached, int32_t score)
     /* Load existing hall of fame data into slots 0..9 */
     hof_load_dat("assets/HALLOFFA.DAT");
 
-    new_entry_index = -1;
-
     if (player_name && player_name[0]) {
         /* Create candidate entry in slot 10 (the 11th slot).
          * Matches FUN_1000_aad7: copies player name, level, score into a
@@ -186,18 +183,6 @@ void hof_init(const char *player_name, int level_reached, int32_t score)
 
         /* Sort all 11 entries, then discard the last one (keep top 10) */
         hof_sort(HOF_SORT_SLOTS);
-
-        /* Find where candidate ended up (in the top 10) */
-        for (int i = 0; i < HOF_ENTRIES; i++) {
-            if (entries[i].name_len == cand->name_len &&
-                entries[i].level == cand->level &&
-                entries[i].score_lo == cand->score_lo &&
-                entries[i].score_hi == cand->score_hi &&
-                memcmp(entries[i].name, cand->name, HOF_NAME_LEN) == 0) {
-                new_entry_index = i;
-                break;
-            }
-        }
 
         /* Clear slot 10 so it doesn't leak into display */
         memset(&entries[HOF_ENTRIES], 0, sizeof(HofEntry));
@@ -270,19 +255,16 @@ void hof_draw(void)
         /* Y = (rank * 10) + 0xA9.  rank is 1-based (i+1). */
         int y = (i + 1) * 10 + 0xa9;
 
-        /* Build concatenated line matching original FUN_1000_a93f format:
-         *   rank(4 chars) + name(21 chars padded) + " Level "(9 chars)
-         *   + level_num + " Money "(13 chars) + score
-         *
-         * Original allocates:
-         *   local_38 = rank string (4 chars: "NN. ")
-         *   local_1a = name string (21 chars padded with spaces)
-         *   local_24 = " Level NN" (9 chars)
-         *   local_32 = " Money NNNN" (13 chars)
-         * Then concatenates: rank + name + level + money */
-
-        char rank_str[8];
-        snprintf(rank_str, sizeof(rank_str), "%2d. ", i + 1);
+        /* One concatenated Pascal-string line, as FUN_1000_a93f builds it
+         * (every row is printed, empty ones included):
+         *   rank   4 chars  "N." padded with spaces ("10. ")
+         *   name  21 chars  stored name, first char forced to a space (it
+         *                   hides the "N " player-number prefix digit,
+         *                   local_19 = 0x20), padded with spaces
+         *   level  9 chars  " Level N"
+         *   money 12 chars  " Money N" */
+        char rank_str[12];
+        snprintf(rank_str, sizeof(rank_str), "%d.", i + 1);
 
         char name_str[HOF_NAME_LEN + 2];
         memset(name_str, ' ', HOF_NAME_LEN + 1);
@@ -292,32 +274,20 @@ void hof_draw(void)
             if (len > HOF_NAME_LEN) len = HOF_NAME_LEN;
             memcpy(name_str, entries[i].name, len);
         }
+        if (name_str[0] >= '1' && name_str[0] <= '4' && name_str[1] == ' ') {
+            name_str[0] = ' ';
+        }
 
         char level_str[16];
-        if (entries[i].level > 0) {
-            snprintf(level_str, sizeof(level_str), " Level %d", entries[i].level);
-        } else {
-            level_str[0] = '\0';
-        }
+        snprintf(level_str, sizeof(level_str), " Level %d", entries[i].level);
 
         char money_str[24];
-        int32_t sc = hof_score(&entries[i]);
-        if (sc > 0 || entries[i].name_len > 0) {
-            snprintf(money_str, sizeof(money_str), " Money %ld", (long)sc);
-        } else {
-            money_str[0] = '\0';
-        }
+        snprintf(money_str, sizeof(money_str), " Money %ld", (long)hof_score(&entries[i]));
 
-        snprintf(line, sizeof(line), "%s%s%s%s", rank_str, name_str,
-                 level_str, money_str);
+        snprintf(line, sizeof(line), "%-4.4s%-21.21s%-9.9s%-12.12s",
+                 rank_str, name_str, level_str, money_str);
 
-        /* Highlight the new entry */
-        Color c = text_color;
-        if (i == new_entry_index) {
-            c = palette_get_color(14);  /* bright color for highlighting */
-        }
-
-        DrawTextFON(&font, line, HOF_TEXT_X, y, c);
+        DrawTextFON(&font, line, HOF_TEXT_X, y, text_color);
     }
 }
 

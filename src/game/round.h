@@ -73,9 +73,10 @@ typedef struct {
     int          round_number;
     bool         single_player;
     bool         escaped;        /* match aborted (F10) */
-    bool         darkness_enabled; /* fog-of-war / darkness (seg_1010:7197-7201).
-                                    * When active, minimap overlay is also drawn. */
+    bool         darkness_enabled; /* fog-of-war / darkness (seg_1010:7197-7201) */
     bool         paused;          /* pause state (seg_1000:7146, FUN_1000_7194) */
+    bool         random_map;      /* generated map (picker slot >= 30000); only these get
+                                   * their start corners cleared (seg_1010:7455) */
     int          fade_step;       /* current fade step (0..FADE_STEPS) */
     RoundEndReason end_reason;    /* why the round ended (observability only) */
 } Round;

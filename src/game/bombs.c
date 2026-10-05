@@ -1203,6 +1203,297 @@ static void power_bomb_scatter(TileMap *map, int col, int row)
     }
 }
 
+/* Small bomb cross pattern: 4 cardinal tiles (seg_1010:1253-1281).
+ * Offsets are (row_delta, col_delta) in map array convention. */
+static const int small_offsets[][2] = {
+    { 0, -1 }, /* col-1 */
+    { 0,  1 }, /* col+1 */
+    {-1,  0 }, /* row-1 */
+    { 1,  0 }, /* row+1 */
+};
+
+/* Medium bomb diamond: 12 tiles (seg_1010:1349-1410).
+ * Ring 1 (4 cardinal) + Ring 2 (8 at distance 2).
+ * Verified 1:1 against decompiled CONCAT11 patterns. */
+static const int medium_offsets[][2] = {
+    { 0, -1 }, { 0,  1 }, {-1,  0 }, { 1,  0 },   /* ring 1: cardinal */
+    { 0, -2 }, { 1, -1 }, { 2,  0 }, { 1,  1 },   /* ring 2: clockwise */
+    { 0,  2 }, {-1,  1 }, {-2,  0 }, {-1, -1 },    /* from top */
+};
+
+/* Large bomb diamond: 36 tiles (seg_1010:1420-1577).
+ * Ring 1 (4) + Ring 2 (8) + Ring 3 (24).
+ * Verified 1:1 against decompiled CONCAT11 patterns. */
+static const int large_offsets[][2] = {
+    /* Ring 1: cardinal */
+    { 0, -1 }, { 0,  1 }, {-1,  0 }, { 1,  0 },
+    /* Ring 2: same as medium */
+    { 0, -2 }, { 1, -1 }, { 2,  0 }, { 1,  1 },
+    { 0,  2 }, {-1,  1 }, {-2,  0 }, {-1, -1 },
+    /* Ring 3 (seg_1010:1470-1567): clockwise from top */
+    { 0, -3 }, { 1, -3 }, { 1, -2 }, { 2, -2 },
+    { 2, -1 }, { 3, -1 }, { 3,  0 }, { 3,  1 },
+    { 2,  1 }, { 2,  2 }, { 1,  2 }, { 1,  3 },
+    { 0,  3 }, {-1,  3 }, {-1,  2 }, {-2,  2 },
+    {-2,  1 }, {-3,  1 }, {-3,  0 }, {-3, -1 },
+    {-2, -1 }, {-2, -2 }, {-1, -2 }, {-1, -3 },
+};
+
+/* Explosion/fire tile visual decay chain (seg_1010:1958-1986).
+ * These tiles are NOT bombs — they're the visual aftermath of explosions.
+ * When their overlay reaches 1, they transition to the next decay stage,
+ * NOT trigger a new explosion.
+ *
+ * Decay sequences:
+ *   0x84 → 0x61 (overlay=3) → 0x62 (overlay=3) → '0' (floor, overlay=0)
+ *   0x85 → 0x86 (overlay=3) → 0x87 (overlay=3) → 'f' (corpse, overlay=0)
+ *
+ * Returns true if the tile was a decay-chain tile (and has been advanced).
+ */
+static bool fire_decay_step(TileMap *map, int col, int row, uint8_t tile)
+{
+    if (tile == TILE_EXPLOSION) {  /* 0x84 */
+        map->tiles[row][col] = TILE_ROCKET_FIRE;  /* 0x61 */
+        map->overlay[row][col] = 3;
+        return true;
+    }
+    if (tile == TILE_ROCKET_FIRE) {  /* 0x61 'a' */
+        map->tiles[row][col] = 0x62;  /* 'b' */
+        map->overlay[row][col] = 3;
+        return true;
+    }
+    if (tile == 0x62) {  /* 'b' — final decay → floor */
+        map->tiles[row][col] = '0';
+        map->overlay[row][col] = 0;
+        map->collision[row][col] = 0;
+        return true;
+    }
+    if (tile == TILE_EXPLOSION2) {  /* 0x85 */
+        map->tiles[row][col] = 0x86;
+        map->overlay[row][col] = 3;
+        return true;
+    }
+    if (tile == 0x86) {
+        map->tiles[row][col] = 0x87;
+        map->overlay[row][col] = 3;
+        return true;
+    }
+    if (tile == 0x87) {  /* final decay → corpse */
+        map->tiles[row][col] = 'f';
+        map->overlay[row][col] = 0;
+        map->collision[row][col] = 0;
+        return true;
+    }
+    return false;
+}
+
+/* Random bomb (0xAB): explode as random type, then bounce (seg_1010:911-953).
+ * 1. Clear tile to '0'
+ * 2. Detonate a random small/medium/large bomb (0x57+random(3)) at same position
+ * 3. If collision > 1: find a nearby passable tile (±4, up to 7 attempts),
+ *    place a new 0xAB there with collision-1 and random overlay (1..0xB4) */
+static void random_bomb_detonate(TileMap *map, int col, int row)
+{
+    uint16_t coll = map->collision[row][col];
+
+    /* Step 1: clear current tile */
+    map->tiles[row][col] = '0';
+    map->collision[row][col] = 0;
+    map->overlay[row][col] = 0;
+    map->bomb_owner[row][col] = 0xFF;
+
+    /* Step 2: detonate random bomb type at this position (seg_1010:916-917) */
+    uint8_t random_type = (uint8_t)(mb_random(3)) + BOMB_SMALL_1;
+    map->tiles[row][col] = random_type;
+    map->overlay[row][col] = 1;  /* immediate detonation */
+    bomb_detonate(map, col, row);
+
+    /* Step 3: bounce to nearby tile if collision > 1 (seg_1010:918-953) */
+    if (coll > 1) {
+        int dr = 0, dc = 0;
+        int attempts;
+        for (attempts = 0; attempts < 7; attempts++) {
+            dr = (mb_random(8)) - 4;  /* random(-4..3) */
+            dc = (mb_random(8)) - 4;
+            int nr = row + dr, nc = col + dc;
+            if (nr > 1 && nr < 0x3F && nc < 0x2C && nc > 1) {
+                uint8_t dest = map->tiles[nr][nc];
+                /* Passable tiles (seg_1010:930-935):
+                 * '0', '2'-'4', '7'-'9', 'A'-'F', 0x84 */
+                if (dest == '0' ||
+                    (dest > '1' && (dest < '5' ||
+                     (dest > '6' && (dest < '9' + 1 ||
+                      (dest > 'A' - 1 && (dest < 'G' || dest == 0x84))))))) {
+                    break;
+                }
+            }
+        }
+        if (attempts >= 7) {
+            dr = 0;
+            dc = 0;
+        }
+        int nr = row + dr, nc = col + dc;
+        map->tiles[nr][nc] = 0xAB;
+        map->collision[nr][nc] = coll - 1;
+        if (dr != 0 || dc != 0) {
+            map->collision[row][col] = 0;
+        }
+        map->overlay[nr][nc] = (uint16_t)(mb_random(0xB4)) + 1;
+    }
+}
+
+/* Proximity mine movement (seg_1010:2131-2166).
+ * Instead of exploding, mines MOVE to an adjacent passable tile.
+ * Direction is determined by (random(140)+1) % 4. */
+static void proximity_mine_move(TileMap *map, int col, int row)
+{
+    int fuse = (mb_random(140)) + 1;
+    int dir = fuse % 4;
+    int dr = 0, dc = 0;
+    switch (dir) {
+    case 0: dr =  1; break; /* row+1 */
+    case 1: dr = -1; break; /* row-1 */
+    case 2: dc =  1; break; /* col+1 */
+    case 3: dc = -1; break; /* col-1 */
+    }
+    int nr = row + dr, nc = col + dc;
+    if (nr >= 0 && nr < MAP_ROWS && nc >= 0 && nc < MAP_COLS) {
+        uint8_t dest = map->tiles[nr][nc];
+        if (dest == '0' || dest == 'f' || dest == 0xAF) {
+            /* Spawn copy at destination */
+            map->tiles[nr][nc] = 0x6F;
+            map->overlay[nr][nc] = (uint16_t)fuse;
+            map->collision[nr][nc] = BOMB_COLLISION_PROX;
+        }
+    }
+    /* Original mine stays with new fuse (decompiled sets overlay at current pos too) */
+    map->overlay[row][col] = (uint16_t)fuse;
+}
+
+/* Napalm (0x8A) and Cluster bomb (0x80): directional beam pattern
+ * (seg_1010:1284-1340). Extends in 4 cardinal directions, stops at
+ * walls ('1', 'k'-'l', 0xB4-0xB5). 0x8A limited to 16 tiles per arm.
+ * 0x80 limited only by walls/bounds. */
+static void beam_detonate(TileMap *map, int col, int row, uint8_t tile)
+{
+    uint8_t beam_damage = (tile == 0x8A) ? 100 : 200;
+    int max_dist = (tile == 0x8A) ? 16 : MAP_ROWS; /* 0x80 has no limit */
+
+    bombs_check_player_damage(map, col, row, beam_damage);
+    map->tiles[row][col] = '0';
+    map->collision[row][col] = 0;
+    map->overlay[row][col] = 0;
+    map->bomb_owner[row][col] = 0xFF;
+
+    /* 4 cardinal directions (seg_1010:1293-1333) */
+    static const int beam_dirs[4][2] = {
+        { 0,  1 }, /* col+ (DOWN on screen) */
+        { 0, -1 }, /* col- (UP on screen) */
+        { 1,  0 }, /* row+ (RIGHT on screen) */
+        {-1,  0 }, /* row- (LEFT on screen) */
+    };
+    for (int d = 0; d < 4; d++) {
+        for (int dist = 1; dist < max_dist; dist++) {
+            int tr = row + beam_dirs[d][0] * dist;
+            int tc = col + beam_dirs[d][1] * dist;
+            if (tr < 0 || tr >= MAP_ROWS || tc < 0 || tc >= MAP_COLS) break;
+
+            apply_explosion_hit(map, tc, tr, false, beam_damage);
+
+            /* Stop at blocking tiles (seg_1010:1329-1331):
+             * '1' (indestructible), 'k'-'l' (exit/gate), 0xB4-0xB5 (switches) */
+            uint8_t t = map->tiles[tr][tc];
+            if (t == '1' || (t >= 'k' && t <= 'l') ||
+                (t >= 0xB4 && t <= 0xB5)) break;
+        }
+    }
+}
+
+/*
+ * Explosion patterns matching FUN_1010_165b (seg_1010:1247-1578).
+ *
+ * The original uses EXPLICIT cross/diamond coordinate lists, NOT square
+ * radii. Each bomb type has a specific set of offsets extracted from
+ * the decompiled direction cases (local_14 loop).
+ *
+ * Chain-detonation: FUN_1010_1326 (seg_1010:768) checks
+ * (DS[0x1326] & Random()) != 0 before chain-detonating. Since DS[0x1326]
+ * is never initialized (always 0), the AND result is always 0, meaning
+ * chain-detonation through FUN_1010_1326 NEVER happens. Only explicit
+ * code paths (mine cross, rocket beam, power bomb scatter) can trigger it.
+ *
+ * Player stats (digging_power + bonus_stat) are NOT used for explosion
+ * damage — they only affect manual digging.
+ */
+static void pattern_bomb_detonate(TileMap *map, int col, int row, uint8_t tile)
+{
+    /* Determine pattern and player HP damage per bomb type. All pattern
+     * hits are weak (param_2=0 in FUN_1010_165b). */
+    const int (*offsets)[2] = NULL;
+    int num_offsets = 0;
+    uint8_t player_damage = 60;
+
+    switch (tile) {
+    case BOMB_SMALL_1: case BOMB_SMALL_2: case BOMB_SMALL_3:
+    case 0x65: /* 'e' explosive */
+    case 0x7D: /* small detonated */
+        /* Small: cross, weak (seg_1010:1251,1277 → param_2=0, param_3=0x3C) */
+        offsets = small_offsets;
+        num_offsets = 4;
+        player_damage = 0x3C;  /* 60 */
+        break;
+
+    case BOMB_MEDIUM_1: case BOMB_MEDIUM_2: case BOMB_MEDIUM_3:
+    case BOMB_SIG_P3_A: case BOMB_SIG_P1_A: case BOMB_SIG_P4_A: case BOMB_SIG_P2_A:
+    case 0xA0: case 0x7E:
+        /* Medium + sig-A: diamond 12, weak (seg_1010:1348,1406 → param_2=0, param_3=0x54) */
+        offsets = medium_offsets;
+        num_offsets = 12;
+        player_damage = 0x54;  /* 84 */
+        break;
+
+    case BOMB_LARGE_1: case BOMB_LARGE_2: case BOMB_LARGE_3:
+    case BOMB_SIG_P3_B: case BOMB_SIG_P1_B: case BOMB_SIG_P2_B: case BOMB_SIG_P4_B:
+    case 0x9C: case BOMB_RANDOM_DET:
+        /* Large + sig-B: diamond 36, weak (seg_1010:1419,1573 → param_2=0, param_3=100) */
+        offsets = large_offsets;
+        num_offsets = 36;
+        player_damage = 100;
+        break;
+
+    /* BOMB_MEGA_1/BOMB_MEGA_2/BOMB_LARGE_DET handled by mega_bomb_expand(),
+     * 0x8A/0x80 by beam_detonate(), both before this is reached. */
+
+    default:
+        offsets = small_offsets;
+        num_offsets = 4;
+        player_damage = 0x3C;
+        break;
+    }
+
+    /* Check player/entity damage at the bomb center before clearing it.
+     * The original's FUN_1010_165b calls FUN_1010_98dd at the bomb position
+     * for several bomb types (e.g. seg_1010:1251, 1348, 1419). */
+    bombs_check_player_damage(map, col, row, player_damage);
+
+    /* Clear the bomb tile itself */
+    map->tiles[row][col] = '0';
+    map->collision[row][col] = 0;
+    map->overlay[row][col] = 0;
+    map->bomb_owner[row][col] = 0xFF;
+
+    /* Apply explosion at each offset position using the correct pattern.
+     * No chain-detonation: DS[0x1326] is 0, so the original's random
+     * chain-detonation gate in FUN_1010_1326 always fails. */
+    for (int i = 0; i < num_offsets; i++) {
+        int tr = row + offsets[i][0];
+        int tc = col + offsets[i][1];
+        if (tr < 0 || tr >= MAP_ROWS || tc < 0 || tc >= MAP_COLS) continue;
+
+        apply_explosion_hit(map, tc, tr, false, player_damage);
+    }
+}
+
 void bomb_detonate(TileMap *map, int col, int row)
 {
     if (!map) return;
@@ -1213,47 +1504,7 @@ void bomb_detonate(TileMap *map, int col, int row)
     TraceLog(LOG_DEBUG, "BOMB_DETONATE: tile=0x%02X at row=%d col=%d overlay=%d collision=%d",
              tile, row, col, map->overlay[row][col], map->collision[row][col]);
 
-    /* Explosion/fire tile visual decay chain (seg_1010:1958-1986).
-     * These tiles are NOT bombs — they're the visual aftermath of explosions.
-     * When their overlay reaches 1, they transition to the next decay stage,
-     * NOT trigger a new explosion.
-     *
-     * Decay sequences:
-     *   0x84 → 0x61 (overlay=3) → 0x62 (overlay=3) → '0' (floor, overlay=0)
-     *   0x85 → 0x86 (overlay=3) → 0x87 (overlay=3) → 'f' (corpse, overlay=0)
-     */
-    if (tile == TILE_EXPLOSION) {  /* 0x84 */
-        map->tiles[row][col] = TILE_ROCKET_FIRE;  /* 0x61 */
-        map->overlay[row][col] = 3;
-        return;
-    }
-    if (tile == TILE_ROCKET_FIRE) {  /* 0x61 'a' */
-        map->tiles[row][col] = 0x62;  /* 'b' */
-        map->overlay[row][col] = 3;
-        return;
-    }
-    if (tile == 0x62) {  /* 'b' — final decay → floor */
-        map->tiles[row][col] = '0';
-        map->overlay[row][col] = 0;
-        map->collision[row][col] = 0;
-        return;
-    }
-    if (tile == TILE_EXPLOSION2) {  /* 0x85 */
-        map->tiles[row][col] = 0x86;
-        map->overlay[row][col] = 3;
-        return;
-    }
-    if (tile == 0x86) {
-        map->tiles[row][col] = 0x87;
-        map->overlay[row][col] = 3;
-        return;
-    }
-    if (tile == 0x87) {  /* final decay → corpse */
-        map->tiles[row][col] = 'f';
-        map->overlay[row][col] = 0;
-        map->collision[row][col] = 0;
-        return;
-    }
+    if (fire_decay_step(map, col, row, tile)) return;
 
     /* Directional arrows: try to MOVE instead of exploding (seg_1010:1036-1102).
      * If blocked, detonate as small bomb (0x57) at current position. */
@@ -1286,58 +1537,8 @@ void bomb_detonate(TileMap *map, int col, int row)
         return;
     }
 
-    /* Random bomb (0xAB): explode as random type, then bounce (seg_1010:911-953).
-     * 1. Clear tile to '0'
-     * 2. Detonate a random small/medium/large bomb (0x57+random(3)) at same position
-     * 3. If collision > 1: find a nearby passable tile (±4, up to 7 attempts),
-     *    place a new 0xAB there with collision-1 and random overlay (1..0xB4) */
     if (tile == 0xAB) {
-        uint16_t coll = map->collision[row][col];
-
-        /* Step 1: clear current tile */
-        map->tiles[row][col] = '0';
-        map->collision[row][col] = 0;
-        map->overlay[row][col] = 0;
-        map->bomb_owner[row][col] = 0xFF;
-
-        /* Step 2: detonate random bomb type at this position (seg_1010:916-917) */
-        uint8_t random_type = (uint8_t)(mb_random(3)) + BOMB_SMALL_1;
-        map->tiles[row][col] = random_type;
-        map->overlay[row][col] = 1;  /* immediate detonation */
-        bomb_detonate(map, col, row);
-
-        /* Step 3: bounce to nearby tile if collision > 1 (seg_1010:918-953) */
-        if (coll > 1) {
-            int dr = 0, dc = 0;
-            int attempts;
-            for (attempts = 0; attempts < 7; attempts++) {
-                dr = (mb_random(8)) - 4;  /* random(-4..3) */
-                dc = (mb_random(8)) - 4;
-                int nr = row + dr, nc = col + dc;
-                if (nr > 1 && nr < 0x3F && nc < 0x2C && nc > 1) {
-                    uint8_t dest = map->tiles[nr][nc];
-                    /* Passable tiles (seg_1010:930-935):
-                     * '0', '2'-'4', '7'-'9', 'A'-'F', 0x84 */
-                    if (dest == '0' ||
-                        (dest > '1' && (dest < '5' ||
-                         (dest > '6' && (dest < '9' + 1 ||
-                          (dest > 'A' - 1 && (dest < 'G' || dest == 0x84))))))) {
-                        break;
-                    }
-                }
-            }
-            if (attempts >= 7) {
-                dr = 0;
-                dc = 0;
-            }
-            int nr = row + dr, nc = col + dc;
-            map->tiles[nr][nc] = 0xAB;
-            map->collision[nr][nc] = coll - 1;
-            if (dr != 0 || dc != 0) {
-                map->collision[row][col] = 0;
-            }
-            map->overlay[nr][nc] = (uint16_t)(mb_random(0xB4)) + 1;
-        }
+        random_bomb_detonate(map, col, row);
         return;
     }
 
@@ -1376,31 +1577,8 @@ void bomb_detonate(TileMap *map, int col, int row)
         return;
     }
 
-    /* Proximity mine movement (seg_1010:2131-2166).
-     * Instead of exploding, mines MOVE to an adjacent passable tile.
-     * Direction is determined by (random(140)+1) % 4. */
     if (tile == 0x6F) {
-        int fuse = (mb_random(140)) + 1;
-        int dir = fuse % 4;
-        int dr = 0, dc = 0;
-        switch (dir) {
-        case 0: dr =  1; break; /* row+1 */
-        case 1: dr = -1; break; /* row-1 */
-        case 2: dc =  1; break; /* col+1 */
-        case 3: dc = -1; break; /* col-1 */
-        }
-        int nr = row + dr, nc = col + dc;
-        if (nr >= 0 && nr < MAP_ROWS && nc >= 0 && nc < MAP_COLS) {
-            uint8_t dest = map->tiles[nr][nc];
-            if (dest == '0' || dest == 'f' || dest == 0xAF) {
-                /* Spawn copy at destination */
-                map->tiles[nr][nc] = 0x6F;
-                map->overlay[nr][nc] = (uint16_t)fuse;
-                map->collision[nr][nc] = BOMB_COLLISION_PROX;
-            }
-        }
-        /* Original mine stays with new fuse (decompiled sets overlay at current pos too) */
-        map->overlay[row][col] = (uint16_t)fuse;
+        proximity_mine_move(map, col, row);
         return;
     }
 
@@ -1423,174 +1601,12 @@ void bomb_detonate(TileMap *map, int col, int row)
     /* Play explosion sound effect based on bomb type */
     bomb_play_detonation_sfx(tile);
 
-    /*
-     * Explosion patterns matching FUN_1010_165b (seg_1010:1247-1578).
-     *
-     * The original uses EXPLICIT cross/diamond coordinate lists, NOT square
-     * radii. Each bomb type has a specific set of offsets extracted from
-     * the decompiled direction cases (local_14 loop).
-     *
-     * Chain-detonation: FUN_1010_1326 (seg_1010:768) checks
-     * (DS[0x1326] & Random()) != 0 before chain-detonating. Since DS[0x1326]
-     * is never initialized (always 0), the AND result is always 0, meaning
-     * chain-detonation through FUN_1010_1326 NEVER happens. Only explicit
-     * code paths (mine cross, rocket beam, power bomb scatter) can trigger it.
-     *
-     * Player stats (digging_power + bonus_stat) are NOT used for explosion
-     * damage — they only affect manual digging.
-     */
-
-    /* Small bomb cross pattern: 4 cardinal tiles (seg_1010:1253-1281).
-     * Offsets are (row_delta, col_delta) in map array convention. */
-    static const int small_offsets[][2] = {
-        { 0, -1 }, /* col-1 */
-        { 0,  1 }, /* col+1 */
-        {-1,  0 }, /* row-1 */
-        { 1,  0 }, /* row+1 */
-    };
-
-    /* Medium bomb diamond: 12 tiles (seg_1010:1349-1410).
-     * Ring 1 (4 cardinal) + Ring 2 (8 at distance 2).
-     * Verified 1:1 against decompiled CONCAT11 patterns. */
-    static const int medium_offsets[][2] = {
-        { 0, -1 }, { 0,  1 }, {-1,  0 }, { 1,  0 },   /* ring 1: cardinal */
-        { 0, -2 }, { 1, -1 }, { 2,  0 }, { 1,  1 },   /* ring 2: clockwise */
-        { 0,  2 }, {-1,  1 }, {-2,  0 }, {-1, -1 },    /* from top */
-    };
-
-    /* Large bomb diamond: 36 tiles (seg_1010:1420-1577).
-     * Ring 1 (4) + Ring 2 (8) + Ring 3 (24).
-     * Verified 1:1 against decompiled CONCAT11 patterns. */
-    static const int large_offsets[][2] = {
-        /* Ring 1: cardinal */
-        { 0, -1 }, { 0,  1 }, {-1,  0 }, { 1,  0 },
-        /* Ring 2: same as medium */
-        { 0, -2 }, { 1, -1 }, { 2,  0 }, { 1,  1 },
-        { 0,  2 }, {-1,  1 }, {-2,  0 }, {-1, -1 },
-        /* Ring 3 (seg_1010:1470-1567): clockwise from top */
-        { 0, -3 }, { 1, -3 }, { 1, -2 }, { 2, -2 },
-        { 2, -1 }, { 3, -1 }, { 3,  0 }, { 3,  1 },
-        { 2,  1 }, { 2,  2 }, { 1,  2 }, { 1,  3 },
-        { 0,  3 }, {-1,  3 }, {-1,  2 }, {-2,  2 },
-        {-2,  1 }, {-3,  1 }, {-3,  0 }, {-3, -1 },
-        {-2, -1 }, {-2, -2 }, {-1, -2 }, {-1, -3 },
-    };
-
-    /* Determine pattern, damage mode, and player HP damage per bomb type */
-    const int (*offsets)[2] = NULL;
-    int num_offsets = 0;
-    bool strong = false;
-    uint8_t player_damage = 60;
-
-    switch (tile) {
-    case BOMB_SMALL_1: case BOMB_SMALL_2: case BOMB_SMALL_3:
-    case 0x65: /* 'e' explosive */
-    case 0x7D: /* small detonated */
-        /* Small: cross, weak (seg_1010:1251,1277 → param_2=0, param_3=0x3C) */
-        offsets = small_offsets;
-        num_offsets = 4;
-        strong = false;
-        player_damage = 0x3C;  /* 60 */
-        break;
-
-    case BOMB_MEDIUM_1: case BOMB_MEDIUM_2: case BOMB_MEDIUM_3:
-    case BOMB_SIG_P3_A: case BOMB_SIG_P1_A: case BOMB_SIG_P4_A: case BOMB_SIG_P2_A:
-    case 0xA0: case 0x7E:
-        /* Medium + sig-A: diamond 12, weak (seg_1010:1348,1406 → param_2=0, param_3=0x54) */
-        offsets = medium_offsets;
-        num_offsets = 12;
-        strong = false;
-        player_damage = 0x54;  /* 84 */
-        break;
-
-    case BOMB_LARGE_1: case BOMB_LARGE_2: case BOMB_LARGE_3:
-    case BOMB_SIG_P3_B: case BOMB_SIG_P1_B: case BOMB_SIG_P2_B: case BOMB_SIG_P4_B:
-    case 0x9C: case BOMB_RANDOM_DET:
-        /* Large + sig-B: diamond 36, weak (seg_1010:1419,1573 → param_2=0, param_3=100) */
-        offsets = large_offsets;
-        num_offsets = 36;
-        strong = false;
-        player_damage = 100;
-        break;
-
-    /* BOMB_MEGA_1/BOMB_MEGA_2/BOMB_LARGE_DET handled above by mega_bomb_expand() */
-
-    case 0x8A:
-    case 0x80:
-        /* Napalm (0x8A) and Cluster (0x80): directional beam pattern.
-         * Extends in 4 cardinal directions until hitting walls.
-         * 0x8A has max range 16; 0x80 has no max range.
-         * Handled by beam_detonate() below. */
-        break;
-
-    default:
-        offsets = small_offsets;
-        num_offsets = 4;
-        strong = false;
-        player_damage = 0x3C;
-        break;
-    }
-
-    /* Napalm (0x8A) and Cluster bomb (0x80): directional beam pattern
-     * (seg_1010:1284-1340). Extends in 4 cardinal directions, stops at
-     * walls ('1', 'k'-'l', 0xB4-0xB5). 0x8A limited to 16 tiles per arm.
-     * 0x80 limited only by walls/bounds. */
     if (tile == 0x8A || tile == 0x80) {
-        uint8_t beam_damage = (tile == 0x8A) ? 100 : 200;
-        int max_dist = (tile == 0x8A) ? 16 : MAP_ROWS; /* 0x80 has no limit */
-
-        bombs_check_player_damage(map, col, row, beam_damage);
-        map->tiles[row][col] = '0';
-        map->collision[row][col] = 0;
-        map->overlay[row][col] = 0;
-        map->bomb_owner[row][col] = 0xFF;
-
-        /* 4 cardinal directions (seg_1010:1293-1333) */
-        static const int beam_dirs[4][2] = {
-            { 0,  1 }, /* col+ (DOWN on screen) */
-            { 0, -1 }, /* col- (UP on screen) */
-            { 1,  0 }, /* row+ (RIGHT on screen) */
-            {-1,  0 }, /* row- (LEFT on screen) */
-        };
-        for (int d = 0; d < 4; d++) {
-            for (int dist = 1; dist < max_dist; dist++) {
-                int tr = row + beam_dirs[d][0] * dist;
-                int tc = col + beam_dirs[d][1] * dist;
-                if (tr < 0 || tr >= MAP_ROWS || tc < 0 || tc >= MAP_COLS) break;
-
-                apply_explosion_hit(map, tc, tr, false, beam_damage);
-
-                /* Stop at blocking tiles (seg_1010:1329-1331):
-                 * '1' (indestructible), 'k'-'l' (exit/gate), 0xB4-0xB5 (switches) */
-                uint8_t t = map->tiles[tr][tc];
-                if (t == '1' || (t >= 'k' && t <= 'l') ||
-                    (t >= 0xB4 && t <= 0xB5)) break;
-            }
-        }
+        beam_detonate(map, col, row, tile);
         return;
     }
 
-    /* Check player/entity damage at the bomb center before clearing it.
-     * The original's FUN_1010_165b calls FUN_1010_98dd at the bomb position
-     * for several bomb types (e.g. seg_1010:1251, 1348, 1419). */
-    bombs_check_player_damage(map, col, row, player_damage);
-
-    /* Clear the bomb tile itself */
-    map->tiles[row][col] = '0';
-    map->collision[row][col] = 0;
-    map->overlay[row][col] = 0;
-    map->bomb_owner[row][col] = 0xFF;
-
-    /* Apply explosion at each offset position using the correct pattern.
-     * No chain-detonation: DS[0x1326] is 0, so the original's random
-     * chain-detonation gate in FUN_1010_1326 always fails. */
-    for (int i = 0; i < num_offsets; i++) {
-        int tr = row + offsets[i][0];
-        int tc = col + offsets[i][1];
-        if (tr < 0 || tr >= MAP_ROWS || tc < 0 || tc >= MAP_COLS) continue;
-
-        apply_explosion_hit(map, tc, tr, strong, player_damage);
-    }
+    pattern_bomb_detonate(map, col, row, tile);
 }
 
 /*

@@ -4,6 +4,7 @@
 #include "gfx/palette.h"
 #include "input/input.h"
 #include "raylib.h"
+#include <ctype.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -18,13 +19,20 @@
 /* Layout from decompiled key_config_screen (seg_1010:7731):
  * Text Y = (player * 8 + 10 + action_row) * 10
  * Label X = 180 (0xB4), Key name X = 356 (0x164)
- * 3-pass shadow text: (color 12, X-1), (color 4, X+1), (color 8, X) */
+ * Label ("Player N Left       : ", 22 chars) is 3-pass shadow text:
+ * (color 12, X-1), (color 4, X+1), (color 8, X). The key name is drawn once,
+ * without shadow, by FUN_1018_2652: color 8, or color 5 (blue) once the row has
+ * been confirmed (seg_1010:7977, 7999, ...). */
 #define LABEL_X     180
 #define KEY_NAME_X  356
+#define KEY_COLOR_PENDING   8
+#define KEY_COLOR_CONFIRMED 5
 
 /* Capture order matches original FUN_1010_d4c4 (seg_1010:7894):
  * offsets 0xF3=Left, 0xF4=Right, 0xF5=Up, 0xF6=Down,
- * 0xF7=Stop, 0xF8=Bomb, 0xFA=Remote, 0xF9=Choose/Sell */
+ * 0xF7=Stop, 0xF8=Bomb, 0xFA=Choose/Sell, 0xF9=Remote.
+ * key_config_screen (seg_1010:7731) lists the rows in the same order, with
+ * the " Choose/Sell: " string (1010:d099) on 0xFA and " Remote     : " on 0xF9. */
 static const PlayerInputAction capture_order[NUM_ACTIONS] = {
     PLAYER_INPUT_LEFT,
     PLAYER_INPUT_RIGHT,
@@ -32,8 +40,8 @@ static const PlayerInputAction capture_order[NUM_ACTIONS] = {
     PLAYER_INPUT_DOWN,
     PLAYER_INPUT_STOP,
     PLAYER_INPUT_BOMB,
-    PLAYER_INPUT_REMOTE,
     PLAYER_INPUT_CYCLE,
+    PLAYER_INPUT_REMOTE,
 };
 
 static const char *action_labels[NUM_ACTIONS] = {
@@ -43,8 +51,8 @@ static const char *action_labels[NUM_ACTIONS] = {
     "Down",
     "Stop",
     "Bomb/Buy",
-    "Remote",
     "Choose/Sell",
+    "Remote",
 };
 
 typedef enum {
@@ -71,6 +79,7 @@ static int debounce_counter;  /* frames remaining before accepting input */
 
 /* Temp buffer for bindings during capture */
 static InputBinding temp_bindings[NUM_PLAYERS][NUM_ACTIONS];
+static bool confirmed[NUM_PLAYERS][NUM_ACTIONS];
 
 static int text_y(int player, int action_row)
 {
@@ -121,6 +130,7 @@ void key_config_init(void)
     capture_action = 0;
     debounce_counter = 0;
     state = KC_FADE_IN;
+    memset(confirmed, 0, sizeof(confirmed));
 
     copy_bindings_from_system();
 }
@@ -171,6 +181,7 @@ KeyConfigResult key_config_update(void)
         /* ESC = skip this binding (keep existing) */
         if (IsKeyPressed(KEY_ESCAPE)) {
             /* Advance to next */
+            confirmed[capture_player][capture_action] = true;
             capture_action++;
             if (capture_action >= NUM_ACTIONS) {
                 capture_action = 0;
@@ -208,6 +219,7 @@ KeyConfigResult key_config_update(void)
         break;
 
     advance:
+        confirmed[capture_player][capture_action] = true;
         capture_action++;
         if (capture_action >= NUM_ACTIONS) {
             capture_action = 0;
@@ -247,24 +259,23 @@ void key_config_draw(void)
     if (state == KC_FADE_IN && palette_is_fading()) return;
 
     /* Draw all player bindings.
-     * Original format: "Player N  ActionLabel" on each line, key name at X=356. */
+     * Original format: "Player N " + label padded to 11 + ": " on each line
+     * (strings 1010:d03f..d0a8), key name at X=356. The key names are
+     * uppercase in the original. */
     for (int p = 0; p < NUM_PLAYERS; p++) {
         for (int a = 0; a < NUM_ACTIONS; a++) {
             int y = text_y(p, a);
 
-            /* "Player N  ActionLabel" */
             char label[48];
-            snprintf(label, sizeof(label), "Player %d  %s", p + 1, action_labels[a]);
+            snprintf(label, sizeof(label), "Player %d %-11s: ", p + 1, action_labels[a]);
             draw_shadow_text(label, LABEL_X, y);
 
-            /* Key name */
-            const char *name;
-            if (state == KC_CAPTURING && p == capture_player && a == capture_action) {
-                name = "???";
-            } else {
-                name = input_binding_name(temp_bindings[p][a]);
-            }
-            draw_shadow_text(name, KEY_NAME_X, y);
+            char name[24];
+            snprintf(name, sizeof(name), "%s", input_binding_name(temp_bindings[p][a]));
+            for (char *c = name; *c; c++) *c = (char)toupper((unsigned char)*c);
+            DrawTextFON(&font, name, KEY_NAME_X, y,
+                        palette_get_color(confirmed[p][a] ? KEY_COLOR_CONFIRMED
+                                                          : KEY_COLOR_PENDING));
         }
     }
 }

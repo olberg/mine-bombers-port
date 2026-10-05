@@ -27,6 +27,7 @@
 #include "autoplay.h"
 #include "util/prng.h"
 #include "util/asset_check.h"
+#include "util/harness_env.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -99,12 +100,14 @@ static const char *state_name(GameState s) {
     return "???";
 }
 
-static void change_state(GameState *st, GameState new_st) {
-    TraceLog(LOG_INFO, "STATE: %s -> %s", state_name(*st), state_name(new_st));
+static GameState g_state = STATE_INIT;
+
+static void change_state(GameState new_st) {
+    TraceLog(LOG_INFO, "STATE: %s -> %s", state_name(g_state), state_name(new_st));
     if (autoplay_active()) {
-        autoplay_notify_state(state_name(*st), state_name(new_st));
+        autoplay_notify_state(state_name(g_state), state_name(new_st));
     }
-    *st = new_st;
+    g_state = new_st;
 }
 
 /* Gameplay state */
@@ -211,7 +214,7 @@ static void play_gameplay_music(void)
 
 /* Match-level reset pass. Mirrors process_menu_selection (seg_1010:7158-7228),
  * which the original runs once between menu exit and the round loop to clean
- * per-player state for a new match. See structural audit finding A2.
+ * per-player state for a new match.
  *
  * Step 7: wallets = Starting Cash option (MP, seg_1010:7174-7183) or 250
  *   (SP, seg_1010:7170) — handled by player_init_from_record, which the
@@ -223,8 +226,23 @@ static void play_gameplay_music(void)
  *   passes. No port equivalent needed. */
 static void game_reset_for_new_match(void)
 {
-    /* All steps are currently covered elsewhere (see above); the function
-     * remains as the anchor for the original's match-reset point. */
+    /* The routine rewrites the option globals themselves, so the Options
+     * screen shows the change afterwards (DOSBox capture of the options
+     * screen after a single-player game).
+     *   - fewer than 2 players: Selling option = on (g_player3_color = 1,
+     *     seg_1010:7169-7172);
+     *   - exactly 1 player: Rounds = 15, i.e. the 15-level campaign
+     *     (g_total_rounds = 0xf, seg_1010:7216-7218);
+     *   - Rounds of 0 become 1 (seg_1010:7220-7222). */
+    if (g_config.num_players < 2) {
+        g_config.option_toggle[2] = 1;
+    }
+    if (g_config.num_players == 1) {
+        g_config.total_rounds = 15;
+    }
+    if (g_config.total_rounds == 0) {
+        g_config.total_rounds = 1;
+    }
 }
 
 static bool round_loaded;
@@ -315,7 +333,574 @@ static void end_round(void)
     round_loaded = false;
 }
 
-int main(int argc, char *argv[])
+/* Transitions shared by several states. */
+
+static void enter_menu(void)
+{
+    menu_init();
+    change_state(STATE_MENU);
+}
+
+static void enter_menu_with_music(void)
+{
+    play_menu_music();
+    enter_menu();
+}
+
+static void enter_options(void)
+{
+    options_init();
+    change_state(STATE_OPTIONS);
+}
+
+static void enter_shop_for_next_round(void)
+{
+    load_round();
+    shop_init();
+    play_shop_music();
+    change_state(STATE_SHOP);
+}
+
+static void enter_results(void)
+{
+    results_accumulate_match_stats(g_players, g_num_active_players);
+    results_init(g_players, g_num_active_players);
+    change_state(STATE_RESULTS);
+}
+
+static void enter_hall_of_fame(void)
+{
+    hof_init(g_players[0].name,
+             current_map_index,
+             g_players[0].cash);
+    change_state(STATE_HALL_OF_FAME);
+}
+
+static void update_title(void)
+{
+    if (autoplay_active() || title_update() == TITLE_DONE) {
+        title_cleanup();
+        enter_menu();
+    }
+}
+
+static void update_menu(void)
+{
+    MenuSelection sel;
+    if (autoplay_active()) {
+        sel = autoplay_menu_wants_start() ? MENU_START : MENU_QUIT;
+    } else {
+        sel = menu_update();
+    }
+    if (sel != MENU_NONE) {
+        menu_cleanup();
+        switch (sel) {
+        case MENU_OPTIONS:
+            enter_options();
+            break;
+        case MENU_INFO:
+            info_init();
+            change_state(STATE_INFO);
+            break;
+        case MENU_START:
+            /* Original (seg_1000:7052-7061) resets per-match state,
+             * mutes the menu music and loads OEKU.S3M before the
+             * player-select screen. Player select runs in silence;
+             * music resumes at the shop's order jump. */
+            game_reset_for_new_match();
+            load_game_music();
+            player_select_init();
+            change_state(STATE_PLAYER_SELECT);
+            break;
+        case MENU_QUIT:
+            change_state(STATE_QUIT);
+            break;
+        default:
+            menu_init();
+            break;
+        }
+    }
+}
+
+static void update_options(void)
+{
+    OptionsResult opt_res = options_update();
+    if (opt_res == OPTIONS_DONE) {
+        options_cleanup();
+        enter_menu();
+    } else if (opt_res == OPTIONS_KEY_CONFIG) {
+        options_cleanup();
+        key_config_init();
+        change_state(STATE_KEY_CONFIG);
+    } else if (opt_res == OPTIONS_SOUND_CONFIG) {
+        options_cleanup();
+        sound_config_init();
+        change_state(STATE_SOUND_CONFIG);
+    } else if (opt_res == OPTIONS_MAP_SELECT) {
+        options_cleanup();
+        map_picker_init();
+        change_state(STATE_MAP_PICKER);
+    }
+}
+
+static void update_key_config(void)
+{
+    if (key_config_update() == KEY_CONFIG_DONE) {
+        key_config_cleanup();
+        enter_options();
+    }
+}
+
+static void update_sound_config(void)
+{
+    if (sound_config_update() == SOUND_CONFIG_DONE) {
+        sound_config_cleanup();
+        enter_options();
+    }
+}
+
+static void update_info(void)
+{
+    if (info_update() == INFO_DONE) {
+        info_cleanup();
+        enter_menu();
+    }
+}
+
+static void update_map_picker(void)
+{
+    /* Map picker screen: select maps for each multiplayer round.
+     * Decompiled ref: FUN_1010_e231 (seg_1010:8533-8611).
+     * Invoked from the options submenu (process_menu_selection item 0xC,
+     * seg_1000:544-549). Returns to options when done. */
+    if (map_picker_update() == MAP_PICKER_DONE) {
+        map_picker_cleanup();
+        enter_options();
+    }
+}
+
+static void update_player_select(void)
+{
+    PlayerSelectResult res;
+    if (autoplay_active()) {
+        /* MB_AUTOPLAY_PSELDWELL keeps the real screen up N frames
+         * (the state-transition shot on leaving captures its last
+         * frame). The real update runs during the dwell so the
+         * fade-in completes; no keys are injected. Then: scripted
+         * bot setup; all rounds random via untouched picker slots
+         * (32000), exactly as a user who never opens the map
+         * picker. */
+        if (!autoplay_pselect_should_leave()) {
+            player_select_update();
+            res = PSELECT_NONE;
+        } else {
+            autoplay_setup_players();
+            map_picker_reset();
+            res = PSELECT_RANDOM;
+        }
+    } else {
+        res = player_select_update();
+    }
+    if (res == PSELECT_DONE || res == PSELECT_RANDOM) {
+        player_select_cleanup();
+
+        /* Setup game session */
+        single_player_mode = (g_config.num_players == 1);
+        /* The original clamps g_total_rounds to 0x37 = 55 in
+         * game_state_update at every round start (seg_1010:7450),
+         * bounding it to the 56-entry map-selection table. Clamp
+         * the same global once at match start — equivalent, since
+         * nothing raises it mid-match. */
+        if (g_config.total_rounds > 55) {
+            g_config.total_rounds = 55;
+        }
+        rounds_remaining = g_config.total_rounds;
+        current_map_index = 0;
+
+        /* Both SP and MP enter the shop before the first round.
+         * The original (seg_1000:7103) runs the
+         * shop for SP as well (param_1=0 for solo-mode layout). The
+         * port previously skipped the shop in SP entirely, breaking
+         * the campaign economy. The round loads BEFORE the shop
+         * so the shop can preview the upcoming map. */
+        enter_shop_for_next_round();
+    } else if (res == PSELECT_CANCEL) {
+        player_select_cleanup();
+        enter_menu_with_music();
+    }
+}
+
+static void abort_shop(void)
+{
+    shop_cleanup();
+    /* A round was pre-loaded for this shop — discard
+     * it; the original simply abandons the loaded map. */
+    if (round_loaded) {
+        round_cleanup(&current_round);
+        round_loaded = false;
+    }
+    /* F10 at the shop (seg_1010:7047-7052) sets g_round_over
+     * and zeroes g_rounds_remaining — but the original then
+     * falls straight through the skipped round into the
+     * post-round block (interest + scoring run with everyone
+     * alive and earned already zeroed by the pre-shop
+     * game_state_update) and the post-match block: results +
+     * PLAYERS.DAT update in MP, GAMEOVER + HoF entry in SP.
+     * Only the player-select F10 (g_mode_flag) skips those.
+     * */
+    music_stop();
+    rounds_remaining = 0;
+    for (int i = 0; i < g_num_active_players && i < MAX_PLAYERS; i++)
+        g_players[i].earned = 0;
+    round_apply_interest(g_players, g_num_active_players);
+    /* NULL map is safe: with every player alive the sole-
+     * survivor treasure bonus (the only map read) can't run. */
+    round_apply_scoring(g_players, g_num_active_players, NULL);
+    if (single_player_mode) {
+        sp_level_complete_init();
+        change_state(STATE_SP_LEVEL_COMPLETE);
+    } else {
+        enter_results();
+    }
+}
+
+static void update_shop(void)
+{
+    ShopResult sr;
+    if (autoplay_active()) {
+        /* Normally leaves instantly; MB_AUTOPLAY_SHOPDWELL keeps
+         * the shop open N frames for screenshots. The
+         * real shop_update still runs during the dwell so the
+         * page state (items, names, thumbnail) is drawn — no
+         * keys are injected, so nothing is bought. */
+        if (autoplay_shop_should_leave()) {
+            sr = SHOP_DONE;
+        } else {
+            shop_update();
+            sr = SHOP_ACTIVE;
+        }
+    } else {
+        sr = shop_update();
+    }
+    if (sr == SHOP_DONE) {
+        shop_cleanup();
+        begin_round();
+        play_gameplay_music();
+        debug_set_round(&current_round);
+        change_state(STATE_GAMEPLAY);
+    } else if (sr == SHOP_ABORTED) {
+        abort_shop();
+    }
+}
+
+/* Next step after an SP round has ended. */
+static void sp_after_round(bool escaped, bool player_died)
+{
+    /* SP only shows level-complete /
+     * congrats / Hall-of-Fame at *match end*, not after every
+     * round. Per-round SP progress goes back through the shop
+     * to the next level (or a retry with a life deducted).
+     * (seg_1000:7315-7328 — GAMEOVER/CONGRATU run OUTSIDE the
+     * round loop.) */
+    bool match_end = false;
+    bool campaign_done = false;
+
+    if (escaped) {
+        /* F10 = give up: campaign over, GAMEOVER screen and
+         * HoF entry with the wallet as-is (seg_1000:7315-
+         * 7328 — the gates only check quit/mode_flag). */
+        match_end = true;
+    } else if (player_died) {
+        g_players[0].lives--;
+        if (g_players[0].lives < 1) {
+            match_end = true;   /* game over */
+        }
+        /* else: retry same level, fall through to shop */
+    } else {
+        current_map_index++;
+        if (current_map_index >= 15) {
+            match_end = true;
+            campaign_done = true;
+        }
+    }
+
+    if (match_end) {
+        music_stop();
+        if (campaign_done) {
+            sp_complete_init();
+            change_state(STATE_SP_CONGRATS);
+        } else {
+            sp_level_complete_init();
+            change_state(STATE_SP_LEVEL_COMPLETE);
+        }
+    } else {
+        /* Back to shop for the next SP round (retry or
+         * advance) — load it first. */
+        enter_shop_for_next_round();
+    }
+}
+
+static void finish_round(void)
+{
+    /* Round-end mute: the original disables music before the
+     * per-player finalizers and the results screen
+     * (swap_display_pages at seg_1000:7299). Music next resumes
+     * at the following shop's order jump (or the menu reload). */
+    music_stop();
+
+    if (autoplay_active()) {
+        autoplay_trace_round(&current_round, g_players,
+                             g_num_active_players,
+                             g_config.total_rounds - rounds_remaining + 1,
+                             music_jump);
+    }
+
+    /* 7% savings interest (FUN_1010_ceb3): the original calls
+     * it per active player in the post-round block
+     * (seg_1000:7300-7309), unconditionally in BOTH modes (even
+     * on ESC), immediately BEFORE the scoring call — interest
+     * compounds on banked cash only, never on this round's
+     * still-unbanked pickups. */
+    round_apply_interest(g_players, g_num_active_players);
+
+    /* Apply scoring (FUN_1000_a17c). The original runs this
+     * unconditionally in the post-round block (seg_1000:7310)
+     * in BOTH modes — SP banks the level's earnings into cash,
+     * MP redistributes dead players' earnings — even when the
+     * round ended via ESC. */
+    round_apply_scoring(g_players, g_num_active_players,
+                        &current_round.map);
+
+    bool escaped = current_round.escaped;
+    bool player_died = single_player_mode && g_players[0].dead;
+    end_round();
+    debug_set_round(NULL);
+
+    /* In the original (seg_1000:7065-7172), g_rounds_remaining
+     * is incremented on SP death to cancel the loop's decrement,
+     * effectively retrying the same level. Only decrement when
+     * the round wasn't a SP death-retry. */
+    if (!player_died) {
+        rounds_remaining--;
+    }
+
+    if (escaped) {
+        /* F10 in-round (seg_1000:7160-7164):
+         *  rounds_remaining = 0 and the round ends —
+         * but neither g_quit_flag nor g_mode_flag is set, so
+         * the original still runs the full post-match block:
+         * results + PLAYERS.DAT update in MP, GAMEOVER + HoF
+         * entry in SP. Interest and scoring for the aborted
+         * round were already applied above, exactly as in the
+         * original's unconditional post-round block. */
+        rounds_remaining = 0;
+    }
+
+    if (single_player_mode) {
+        sp_after_round(escaped, player_died);
+    } else if (rounds_remaining > 0) {
+        /* Multiplayer, more rounds to play: the original's
+         * per-round flow is simply round → shop → round
+         * (seg_1000:7065 loop). The results screen and the
+         * PLAYERS.DAT update are in the POST-MATCH block
+         * (outside the round loop, seg_1000:7314-7339) — the
+         * port previously showed results and saved records
+         * after every round. */
+        current_map_index++;
+        enter_shop_for_next_round();
+    } else {
+        /* Multiplayer match complete: results screen, then the
+         * once-per-match stats merge (seg_1000:7323-7339).
+         * The results screen itself increments matches played /
+         * matches won in the match-stats blocks before the
+         * merge. */
+        enter_results();
+    }
+}
+
+static void update_gameplay(void)
+{
+    if (autoplay_active()) {
+        autoplay_drive_players(g_players, g_num_active_players);
+        if (!autoplay_check_watchdog(&current_round)) {
+            change_state(STATE_QUIT);
+            return;
+        }
+    }
+    RoundState rs = round_update(&current_round, g_players,
+                                 g_num_active_players);
+    if (rs == ROUND_OVER) {
+        finish_round();
+    }
+}
+
+static void update_sp_level_complete(void)
+{
+    /* GAMEOVER.SPY — shown once at SP match end (out of lives).
+     * Decompiled ref: seg_1000:7315-7321 — outside the round loop. */
+    if (sp_level_complete_update() == SPLC_DONE) {
+        sp_level_complete_cleanup();
+        enter_hall_of_fame();
+    }
+}
+
+static void update_sp_congrats(void)
+{
+    /* CONGRATU.SPY — shown once when the 15-level SP campaign is
+     * completed. Decompiled ref: seg_1000:7315-7321. */
+    if (sp_complete_update() == SPC_DONE) {
+        sp_complete_cleanup();
+        enter_hall_of_fame();
+    }
+}
+
+static void update_hall_of_fame(void)
+{
+    /* Hall of Fame entry — runs once at match end, then back to menu.
+     * Decompiled ref: seg_1000:7326-7327 (FUN_1000_aad7 call is the
+     * entry; the HoF view is part of it). */
+    if (hof_update() == HOF_DONE) {
+        hof_cleanup();
+        enter_menu_with_music();
+    }
+}
+
+static void update_results(void)
+{
+    /* Reached only at match end — including F10 aborts
+     * from the shop or mid-round. After the screen, merge
+     * each player's match-stats block into PLAYERS.DAT — the
+     * original calls FUN_1000_15c7 per player in the post-match
+     * block (seg_1000:7329-7339), multiplayer only, skipped only
+     * on program quit or a player-select F10 (g_mode_flag). */
+    bool results_done;
+    if (autoplay_active()) {
+        /* MB_AUTOPLAY_RESDWELL keeps the real screen up N frames
+         * for screenshots (fade-in runs via results_update; no
+         * keys are consumed). */
+        if (autoplay_results_should_leave()) {
+            results_done = true;
+        } else {
+            results_update();
+            results_done = false;
+        }
+    } else {
+        results_done = (results_update() == RESULTS_DONE);
+    }
+    if (results_done) {
+        results_cleanup();
+        {
+            PlayerDatabase *db = player_select_get_db();
+            for (int i = 0; i < g_num_active_players && i < MAX_PLAYERS; i++) {
+                player_db_merge_match_stats(db, &g_players[i]);
+            }
+            player_db_save(db, "assets/players.dat");
+        }
+        if (autoplay_active()) autoplay_match_completed();
+        enter_menu_with_music();
+    }
+}
+
+static void update_state(void)
+{
+    switch (g_state) {
+    case STATE_TITLE:              update_title();              break;
+    case STATE_MENU:               update_menu();               break;
+    case STATE_OPTIONS:            update_options();            break;
+    case STATE_KEY_CONFIG:         update_key_config();         break;
+    case STATE_SOUND_CONFIG:       update_sound_config();       break;
+    case STATE_INFO:               update_info();               break;
+    case STATE_MAP_PICKER:         update_map_picker();         break;
+    case STATE_PLAYER_SELECT:      update_player_select();      break;
+    case STATE_SHOP:               update_shop();               break;
+    case STATE_GAMEPLAY:           update_gameplay();           break;
+    case STATE_SP_LEVEL_COMPLETE:  update_sp_level_complete();  break;
+    case STATE_SP_CONGRATS:        update_sp_congrats();        break;
+    case STATE_HALL_OF_FAME:       update_hall_of_fame();       break;
+    case STATE_RESULTS:            update_results();            break;
+    default:
+        break;
+    }
+}
+
+static void draw_state(void)
+{
+    switch (g_state) {
+    case STATE_TITLE:         title_draw();          break;
+    case STATE_MENU:          menu_draw();           break;
+    case STATE_OPTIONS:       options_draw();        break;
+    case STATE_INFO:          info_draw();           break;
+    case STATE_PLAYER_SELECT: player_select_draw();  break;
+    case STATE_SHOP:          shop_draw();           break;
+    case STATE_GAMEPLAY:
+        round_draw(&current_round, g_players, g_num_active_players);
+        break;
+    case STATE_RESULTS:            results_draw();            break;
+    case STATE_SP_LEVEL_COMPLETE:  sp_level_complete_draw();  break;
+    case STATE_SP_CONGRATS:        sp_complete_draw();        break;
+    case STATE_HALL_OF_FAME:       hof_draw();                break;
+    case STATE_KEY_CONFIG: key_config_draw(); break;
+    case STATE_SOUND_CONFIG: sound_config_draw(); break;
+    case STATE_MAP_PICKER: map_picker_draw(); break;
+    default: break;
+    }
+}
+
+/* MB_SHOT_OPTIONS=<file.png>: boot straight into the options screen,
+ * export the native render texture after the fade settles, then exit.
+ * Visual-fidelity harness knob (mirrors the F12 export). */
+static const char *shot_options;
+static int shot_options_frames;
+
+static void draw_frame(RenderTexture2D target)
+{
+    /* Draw at native resolution */
+    BeginTextureMode(target);
+        ClearBackground(BLACK);
+        draw_state();
+    EndTextureMode();
+
+    /* Scale up to window */
+    BeginDrawing();
+        ClearBackground(BLACK);
+        DrawTexturePro(
+            target.texture,
+            (Rectangle){0, 0, RENDER_WIDTH, -RENDER_HEIGHT},
+            (Rectangle){0, 0, WINDOW_WIDTH, WINDOW_HEIGHT},
+            (Vector2){0, 0},
+            0.0f,
+            WHITE
+        );
+        /* Debug overlay drawn at window resolution (1280x960) */
+        if (g_state == STATE_GAMEPLAY) {
+            debug_draw(g_players, g_num_active_players);
+        } else {
+            debug_draw(NULL, 0);
+        }
+    EndDrawing();
+
+    if (shot_options && g_state == STATE_OPTIONS) {
+        if (++shot_options_frames == 90) {
+            Image shot = LoadImageFromTexture(target.texture);
+            ImageFlipVertical(&shot);
+            ExportImage(shot, shot_options);
+            UnloadImage(shot);
+            change_state(STATE_QUIT);
+        }
+    }
+
+    /* F12 = screenshot of render texture (native res) */
+    if (IsKeyPressed(KEY_F12)) {
+        Image shot = LoadImageFromTexture(target.texture);
+        ImageFlipVertical(&shot);
+        ExportImage(shot, "screenshot.png");
+        UnloadImage(shot);
+        TraceLog(LOG_INFO, "Screenshot saved: screenshot.png");
+    }
+}
+
+/* Returns false when the game data is missing; nothing is open then. */
+static bool app_startup(int argc, char *argv[], RenderTexture2D *out_target)
 {
     debug_parse_args(argc, argv);
     mb_prng_init();
@@ -328,10 +913,11 @@ int main(int argc, char *argv[])
      * SOUNDCFG.DAT, PLAYERS.DAT, IDENTIFY.DAT, HALLOFFA.DAT). */
     if (!asset_check_startup("assets")) {
         if (log_file) fclose(log_file);
-        return 1;
+        return false;
     }
 
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Mine Bombers");
+    harness_env_apply_monitor();
     SetTargetFPS(60);
     SetExitKey(0);  /* Disable ESC-to-close; game uses ESC for navigation */
 
@@ -342,8 +928,6 @@ int main(int argc, char *argv[])
      * in-round map renderer. Load once at startup so the shop (which runs
      * before the first round) has access to the cell-border and item icons. */
     sprites_init();
-
-    GameState state = STATE_INIT;
 
     /* Load config */
     /* Original config filename verified against the original game: the game writes OPTIONS.CFG
@@ -364,539 +948,50 @@ int main(int argc, char *argv[])
     /* Init audio — menu music is HUIPPE.S3M
      * Original: init_music_playback() loads huippe.s3m at seg_1010:3255 */
     music_init();
+    harness_env_apply_volume();
     sfx_init();
     sound_config_load("assets/SOUNDCFG.DAT");
     if (music_load("assets/HUIPPE.S3M")) {
         music_play();
     }
 
-    /* MB_SHOT_OPTIONS=<file.png>: boot straight into the options screen,
-     * export the native render texture after the fade settles, then exit.
-     * Visual-fidelity harness knob (mirrors the F12 export). */
-    const char *shot_options = getenv("MB_SHOT_OPTIONS");
-    int shot_options_frames = 0;
+    shot_options = getenv("MB_SHOT_OPTIONS");
     if (shot_options) {
         music_stop();
         options_init();
-        change_state(&state, STATE_OPTIONS);
+        change_state(STATE_OPTIONS);
     } else {
-        change_state(&state, STATE_TITLE);
+        change_state(STATE_TITLE);
         title_init();
     }
 
-    while (state != STATE_QUIT && !WindowShouldClose()) {
-        if (state != STATE_KEY_CONFIG) input_update();
-        music_update();
+    *out_target = target;
+    return true;
+}
 
-        /* Update */
-        switch (state) {
-        case STATE_TITLE:
-            if (autoplay_active() || title_update() == TITLE_DONE) {
-                title_cleanup();
-                menu_init();
-                change_state(&state, STATE_MENU);
-            }
-            break;
-
-        case STATE_MENU: {
-            MenuSelection sel;
-            if (autoplay_active()) {
-                sel = autoplay_menu_wants_start() ? MENU_START : MENU_QUIT;
-            } else {
-                sel = menu_update();
-            }
-            if (sel != MENU_NONE) {
-                menu_cleanup();
-                switch (sel) {
-                case MENU_OPTIONS:
-                    options_init();
-                    change_state(&state, STATE_OPTIONS);
-                    break;
-                case MENU_INFO:
-                    info_init();
-                    change_state(&state, STATE_INFO);
-                    break;
-                case MENU_START:
-                    /* Original (seg_1000:7052-7061) resets per-match state,
-                     * mutes the menu music and loads OEKU.S3M before the
-                     * player-select screen. Player select runs in silence;
-                     * music resumes at the shop's order jump. */
-                    game_reset_for_new_match();
-                    load_game_music();
-                    player_select_init();
-                    change_state(&state, STATE_PLAYER_SELECT);
-                    break;
-                case MENU_QUIT:
-                    change_state(&state, STATE_QUIT);
-                    break;
-                default:
-                    menu_init();
-                    break;
-                }
-            }
-            break;
-        }
-
-        case STATE_OPTIONS: {
-            OptionsResult opt_res = options_update();
-            if (opt_res == OPTIONS_DONE) {
-                options_cleanup();
-                menu_init();
-                change_state(&state, STATE_MENU);
-            } else if (opt_res == OPTIONS_KEY_CONFIG) {
-                options_cleanup();
-                key_config_init();
-                change_state(&state, STATE_KEY_CONFIG);
-            } else if (opt_res == OPTIONS_SOUND_CONFIG) {
-                options_cleanup();
-                sound_config_init();
-                change_state(&state, STATE_SOUND_CONFIG);
-            } else if (opt_res == OPTIONS_MAP_SELECT) {
-                options_cleanup();
-                map_picker_init();
-                change_state(&state, STATE_MAP_PICKER);
-            }
-            break;
-        }
-
-        case STATE_KEY_CONFIG:
-            if (key_config_update() == KEY_CONFIG_DONE) {
-                key_config_cleanup();
-                options_init();
-                change_state(&state, STATE_OPTIONS);
-            }
-            break;
-
-        case STATE_SOUND_CONFIG:
-            if (sound_config_update() == SOUND_CONFIG_DONE) {
-                sound_config_cleanup();
-                options_init();
-                change_state(&state, STATE_OPTIONS);
-            }
-            break;
-
-        case STATE_INFO:
-            if (info_update() == INFO_DONE) {
-                info_cleanup();
-                menu_init();
-                change_state(&state, STATE_MENU);
-            }
-            break;
-
-        case STATE_MAP_PICKER:
-            /* Map picker screen: select maps for each multiplayer round.
-             * Decompiled ref: FUN_1010_e231 (seg_1010:8533-8611).
-             * Invoked from the options submenu (process_menu_selection item 0xC,
-             * seg_1000:544-549). Returns to options when done. */
-            if (map_picker_update() == MAP_PICKER_DONE) {
-                map_picker_cleanup();
-                options_init();
-                change_state(&state, STATE_OPTIONS);
-            }
-            break;
-
-        case STATE_PLAYER_SELECT: {
-            PlayerSelectResult res;
-            if (autoplay_active()) {
-                /* MB_AUTOPLAY_PSELDWELL keeps the real screen up N frames
-                 * (the state-transition shot on leaving captures its last
-                 * frame). The real update runs during the dwell so the
-                 * fade-in completes; no keys are injected. Then: scripted
-                 * bot setup; all rounds random via untouched picker slots
-                 * (32000), exactly as a user who never opens the map
-                 * picker. */
-                if (!autoplay_pselect_should_leave()) {
-                    player_select_update();
-                    res = PSELECT_NONE;
-                } else {
-                    autoplay_setup_players();
-                    map_picker_reset();
-                    res = PSELECT_RANDOM;
-                }
-            } else {
-                res = player_select_update();
-            }
-            if (res == PSELECT_DONE || res == PSELECT_RANDOM) {
-                player_select_cleanup();
-
-                /* Setup game session */
-                single_player_mode = (g_config.num_players == 1);
-                /* The original clamps g_total_rounds to 0x37 = 55 in
-                 * game_state_update at every round start (seg_1010:7450),
-                 * bounding it to the 56-entry map-selection table. Clamp
-                 * the same global once at match start — equivalent, since
-                 * nothing raises it mid-match. */
-                if (g_config.total_rounds > 55) {
-                    g_config.total_rounds = 55;
-                }
-                rounds_remaining = g_config.total_rounds;
-                current_map_index = 0;
-
-                /* Both SP and MP enter the shop before the first round.
-                 * Structural audit B1: the original (seg_1000:7103) runs the
-                 * shop for SP as well (param_1=0 for solo-mode layout). The
-                 * port previously skipped the shop in SP entirely, breaking
-                 * the campaign economy. The round loads BEFORE the shop
-                 * so the shop can preview the upcoming map. */
-                load_round();
-                shop_init();
-                play_shop_music();
-                change_state(&state, STATE_SHOP);
-            } else if (res == PSELECT_CANCEL) {
-                player_select_cleanup();
-                play_menu_music();
-                menu_init();
-                change_state(&state, STATE_MENU);
-            }
-            break;
-        }
-
-        case STATE_SHOP: {
-            ShopResult sr;
-            if (autoplay_active()) {
-                /* Normally leaves instantly; MB_AUTOPLAY_SHOPDWELL keeps
-                 * the shop open N frames for screenshots. The
-                 * real shop_update still runs during the dwell so the
-                 * page state (items, names, thumbnail) is drawn — no
-                 * keys are injected, so nothing is bought. */
-                if (autoplay_shop_should_leave()) {
-                    sr = SHOP_DONE;
-                } else {
-                    shop_update();
-                    sr = SHOP_ACTIVE;
-                }
-            } else {
-                sr = shop_update();
-            }
-            if (sr == SHOP_DONE) {
-                shop_cleanup();
-                begin_round();
-                play_gameplay_music();
-                debug_set_round(&current_round);
-                change_state(&state, STATE_GAMEPLAY);
-            } else if (sr == SHOP_ABORTED) {
-                shop_cleanup();
-                /* A round was pre-loaded for this shop — discard
-                 * it; the original simply abandons the loaded map. */
-                if (round_loaded) {
-                    round_cleanup(&current_round);
-                    round_loaded = false;
-                }
-                /* F10 at the shop (seg_1010:7047-7052) sets g_round_over
-                 * and zeroes g_rounds_remaining — but the original then
-                 * falls straight through the skipped round into the
-                 * post-round block (interest + scoring run with everyone
-                 * alive and earned already zeroed by the pre-shop
-                 * game_state_update) and the post-match block: results +
-                 * PLAYERS.DAT update in MP, GAMEOVER + HoF entry in SP.
-                 * Only the player-select F10 (g_mode_flag) skips those.
-                 * */
-                music_stop();
-                rounds_remaining = 0;
-                for (int i = 0; i < g_num_active_players && i < MAX_PLAYERS; i++)
-                    g_players[i].earned = 0;
-                round_apply_interest(g_players, g_num_active_players);
-                /* NULL map is safe: with every player alive the sole-
-                 * survivor treasure bonus (the only map read) can't run. */
-                round_apply_scoring(g_players, g_num_active_players, NULL);
-                if (single_player_mode) {
-                    sp_level_complete_init();
-                    change_state(&state, STATE_SP_LEVEL_COMPLETE);
-                } else {
-                    results_accumulate_match_stats(g_players,
-                                                   g_num_active_players);
-                    results_init(g_players, g_num_active_players);
-                    change_state(&state, STATE_RESULTS);
-                }
-            }
-            break;
-        }
-
-        case STATE_GAMEPLAY: {
-            if (autoplay_active()) {
-                autoplay_drive_players(g_players, g_num_active_players);
-                if (!autoplay_check_watchdog(&current_round)) {
-                    change_state(&state, STATE_QUIT);
-                    break;
-                }
-            }
-            RoundState rs = round_update(&current_round, g_players,
-                                         g_num_active_players);
-            if (rs == ROUND_OVER) {
-                /* Round-end mute: the original disables music before the
-                 * per-player finalizers and the results screen
-                 * (swap_display_pages at seg_1000:7299). Music next resumes
-                 * at the following shop's order jump (or the menu reload). */
-                music_stop();
-
-                if (autoplay_active()) {
-                    autoplay_trace_round(&current_round, g_players,
-                                         g_num_active_players,
-                                         g_config.total_rounds - rounds_remaining + 1,
-                                         music_jump);
-                }
-
-                /* 7% savings interest (FUN_1010_ceb3): the original calls
-                 * it per active player in the post-round block
-                 * (seg_1000:7300-7309), unconditionally in BOTH modes (even
-                 * on ESC), immediately BEFORE the scoring call — interest
-                 * compounds on banked cash only, never on this round's
-                 * still-unbanked pickups. */
-                round_apply_interest(g_players, g_num_active_players);
-
-                /* Apply scoring (FUN_1000_a17c). The original runs this
-                 * unconditionally in the post-round block (seg_1000:7310)
-                 * in BOTH modes — SP banks the level's earnings into cash,
-                 * MP redistributes dead players' earnings — even when the
-                 * round ended via ESC. */
-                round_apply_scoring(g_players, g_num_active_players,
-                                    &current_round.map);
-
-                bool escaped = current_round.escaped;
-                bool player_died = single_player_mode && g_players[0].dead;
-                end_round();
-                debug_set_round(NULL);
-
-                /* In the original (seg_1000:7065-7172), g_rounds_remaining
-                 * is incremented on SP death to cancel the loop's decrement,
-                 * effectively retrying the same level. Only decrement when
-                 * the round wasn't a SP death-retry. */
-                if (!player_died) {
-                    rounds_remaining--;
-                }
-
-                if (escaped) {
-                    /* F10 in-round (seg_1000:7160-7164):
-                     *  rounds_remaining = 0 and the round ends —
-                     * but neither g_quit_flag nor g_mode_flag is set, so
-                     * the original still runs the full post-match block:
-                     * results + PLAYERS.DAT update in MP, GAMEOVER + HoF
-                     * entry in SP. Interest and scoring for the aborted
-                     * round were already applied above, exactly as in the
-                     * original's unconditional post-round block. */
-                    rounds_remaining = 0;
-                }
-
-                if (single_player_mode) {
-                    /* Structural audit B2/E2: SP only shows level-complete /
-                     * congrats / Hall-of-Fame at *match end*, not after every
-                     * round. Per-round SP progress goes back through the shop
-                     * to the next level (or a retry with a life deducted).
-                     * (seg_1000:7315-7328 — GAMEOVER/CONGRATU run OUTSIDE the
-                     * round loop.) */
-                    bool match_end = false;
-                    bool campaign_done = false;
-
-                    if (escaped) {
-                        /* F10 = give up: campaign over, GAMEOVER screen and
-                         * HoF entry with the wallet as-is (seg_1000:7315-
-                         * 7328 — the gates only check quit/mode_flag). */
-                        match_end = true;
-                    } else if (player_died) {
-                        g_players[0].lives--;
-                        if (g_players[0].lives < 1) {
-                            match_end = true;   /* game over */
-                        }
-                        /* else: retry same level, fall through to shop */
-                    } else {
-                        current_map_index++;
-                        if (current_map_index >= 15) {
-                            match_end = true;
-                            campaign_done = true;
-                        }
-                    }
-
-                    if (match_end) {
-                        music_stop();
-                        if (campaign_done) {
-                            sp_complete_init();
-                            change_state(&state, STATE_SP_CONGRATS);
-                        } else {
-                            sp_level_complete_init();
-                            change_state(&state, STATE_SP_LEVEL_COMPLETE);
-                        }
-                    } else {
-                        /* Back to shop for the next SP round (retry or
-                         * advance) — load it first. */
-                        load_round();
-                        shop_init();
-                        play_shop_music();
-                        change_state(&state, STATE_SHOP);
-                    }
-                } else if (rounds_remaining > 0) {
-                    /* Multiplayer, more rounds to play: the original's
-                     * per-round flow is simply round → shop → round
-                     * (seg_1000:7065 loop). The results screen and the
-                     * PLAYERS.DAT update are in the POST-MATCH block
-                     * (outside the round loop, seg_1000:7314-7339) — the
-                     * port previously showed results and saved records
-                     * after every round. */
-                    current_map_index++;
-                    load_round();
-                    shop_init();
-                    play_shop_music();
-                    change_state(&state, STATE_SHOP);
-                } else {
-                    /* Multiplayer match complete: results screen, then the
-                     * once-per-match stats merge (seg_1000:7323-7339).
-                     * The results screen itself increments matches played /
-                     * matches won in the match-stats blocks before the
-                     * merge. */
-                    results_accumulate_match_stats(g_players,
-                                                   g_num_active_players);
-                    results_init(g_players, g_num_active_players);
-                    change_state(&state, STATE_RESULTS);
-                }
-            }
-            break;
-        }
-
-        case STATE_SP_LEVEL_COMPLETE:
-            /* GAMEOVER.SPY — shown once at SP match end (out of lives).
-             * Decompiled ref: seg_1000:7315-7321 — outside the round loop. */
-            if (sp_level_complete_update() == SPLC_DONE) {
-                sp_level_complete_cleanup();
-                hof_init(g_players[0].name,
-                         current_map_index,
-                         g_players[0].cash);
-                change_state(&state, STATE_HALL_OF_FAME);
-            }
-            break;
-
-        case STATE_SP_CONGRATS:
-            /* CONGRATU.SPY — shown once when the 15-level SP campaign is
-             * completed. Decompiled ref: seg_1000:7315-7321. */
-            if (sp_complete_update() == SPC_DONE) {
-                sp_complete_cleanup();
-                hof_init(g_players[0].name,
-                         current_map_index,
-                         g_players[0].cash);
-                change_state(&state, STATE_HALL_OF_FAME);
-            }
-            break;
-
-        case STATE_HALL_OF_FAME:
-            /* Hall of Fame entry — runs once at match end, then back to menu.
-             * Decompiled ref: seg_1000:7326-7327 (FUN_1000_aad7 call is the
-             * entry; the HoF view is part of it). */
-            if (hof_update() == HOF_DONE) {
-                hof_cleanup();
-                play_menu_music();
-                menu_init();
-                change_state(&state, STATE_MENU);
-            }
-            break;
-
-        case STATE_RESULTS: {
-            /* Reached only at match end — including F10 aborts
-             * from the shop or mid-round. After the screen, merge
-             * each player's match-stats block into PLAYERS.DAT — the
-             * original calls FUN_1000_15c7 per player in the post-match
-             * block (seg_1000:7329-7339), multiplayer only, skipped only
-             * on program quit or a player-select F10 (g_mode_flag). */
-            bool results_done;
-            if (autoplay_active()) {
-                /* MB_AUTOPLAY_RESDWELL keeps the real screen up N frames
-                 * for screenshots (fade-in runs via results_update; no
-                 * keys are consumed). */
-                if (autoplay_results_should_leave()) {
-                    results_done = true;
-                } else {
-                    results_update();
-                    results_done = false;
-                }
-            } else {
-                results_done = (results_update() == RESULTS_DONE);
-            }
-            if (results_done) {
-                results_cleanup();
-                {
-                    PlayerDatabase *db = player_select_get_db();
-                    for (int i = 0; i < g_num_active_players && i < MAX_PLAYERS; i++) {
-                        player_db_merge_match_stats(db, &g_players[i]);
-                    }
-                    player_db_save(db, "assets/players.dat");
-                }
-                if (autoplay_active()) autoplay_match_completed();
-                play_menu_music();
-                menu_init();
-                change_state(&state, STATE_MENU);
-            }
-            break;
-        }
-
-        default:
-            break;
-        }
-
-        /* Draw at native resolution */
-        BeginTextureMode(target);
-            ClearBackground(BLACK);
-            switch (state) {
-            case STATE_TITLE:         title_draw();          break;
-            case STATE_MENU:          menu_draw();           break;
-            case STATE_OPTIONS:       options_draw();        break;
-            case STATE_INFO:          info_draw();           break;
-            case STATE_PLAYER_SELECT: player_select_draw();  break;
-            case STATE_SHOP:          shop_draw();           break;
-            case STATE_GAMEPLAY:
-                round_draw(&current_round, g_players, g_num_active_players);
-                break;
-            case STATE_RESULTS:            results_draw();            break;
-            case STATE_SP_LEVEL_COMPLETE:  sp_level_complete_draw();  break;
-            case STATE_SP_CONGRATS:        sp_complete_draw();        break;
-            case STATE_HALL_OF_FAME:       hof_draw();                break;
-            case STATE_KEY_CONFIG: key_config_draw(); break;
-            case STATE_SOUND_CONFIG: sound_config_draw(); break;
-            case STATE_MAP_PICKER: map_picker_draw(); break;
-            default: break;
-            }
-        EndTextureMode();
-
-        /* Scale up to window */
-        BeginDrawing();
-            ClearBackground(BLACK);
-            DrawTexturePro(
-                target.texture,
-                (Rectangle){0, 0, RENDER_WIDTH, -RENDER_HEIGHT},
-                (Rectangle){0, 0, WINDOW_WIDTH, WINDOW_HEIGHT},
-                (Vector2){0, 0},
-                0.0f,
-                WHITE
-            );
-            /* Debug overlay drawn at window resolution (1280x960) */
-            if (state == STATE_GAMEPLAY) {
-                debug_draw(g_players, g_num_active_players);
-            } else {
-                debug_draw(NULL, 0);
-            }
-        EndDrawing();
-
-        if (shot_options && state == STATE_OPTIONS) {
-            if (++shot_options_frames == 90) {
-                Image shot = LoadImageFromTexture(target.texture);
-                ImageFlipVertical(&shot);
-                ExportImage(shot, shot_options);
-                UnloadImage(shot);
-                change_state(&state, STATE_QUIT);
-            }
-        }
-
-        /* F12 = screenshot of render texture (native res) */
-        if (IsKeyPressed(KEY_F12)) {
-            Image shot = LoadImageFromTexture(target.texture);
-            ImageFlipVertical(&shot);
-            ExportImage(shot, "screenshot.png");
-            UnloadImage(shot);
-            TraceLog(LOG_INFO, "Screenshot saved: screenshot.png");
-        }
-    }
-
+static void app_shutdown(RenderTexture2D target)
+{
     sfx_shutdown();
     music_shutdown();
     sprites_cleanup();
     UnloadRenderTexture(target);
     CloseWindow();
     if (log_file) fclose(log_file);
+}
+
+int main(int argc, char *argv[])
+{
+    RenderTexture2D target;
+    if (!app_startup(argc, argv, &target)) return 1;
+
+    while (g_state != STATE_QUIT && !WindowShouldClose()) {
+        if (g_state != STATE_KEY_CONFIG) input_update();
+        music_update();
+
+        update_state();
+        draw_frame(target);
+    }
+
+    app_shutdown(target);
     return autoplay_finish();
 }

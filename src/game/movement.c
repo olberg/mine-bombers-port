@@ -309,6 +309,25 @@ void player_dig(Player *p, TileMap *map)
     uint16_t damage = (uint16_t)(p->digging_power + p->bonus_stat);
     if (damage < 1) damage = 1;
 
+    /* Non-wall blockers — placed bombs — take the push path
+     * (seg_1000:3656-3706): dig damage drains collision with no
+     * degradation visuals and the tile is NEVER cleared; once collision
+     * drops below 2, each further push attempt tries to slide the bomb one
+     * tile. The drained value rests at 1, not 0: the original's signed
+     * collision goes ≤0 and the push triggers at <2, but in the port
+     * collision 0 means open floor (walkable via move_passable, placeable
+     * by bomb_place), which must not happen while the bomb still sits
+     * there. */
+    if (!tile_in_dig_wall_set(map->tiles[dig_row][dig_col])) {
+        if (hp < 2) {
+            bomb_try_push(map, dig_col, dig_row, p->direction);
+        } else {
+            map->collision[dig_row][dig_col] =
+                (damage >= hp) ? 1 : (uint16_t)(hp - damage);
+        }
+        return;
+    }
+
     TraceLog(LOG_DEBUG, "DIG:   dig_power=%d bonus=%d => damage=%u",
              p->digging_power, p->bonus_stat, damage);
 
@@ -347,6 +366,13 @@ void player_dig(Player *p, TileMap *map)
     }
 }
 
+/* Consume a pickup: the tile becomes open floor. */
+static void pickup_clear_tile(TileMap *map, int row, int col)
+{
+    map->tiles[row][col] = '0';
+    map->collision[row][col] = 0;
+}
+
 bool player_check_pickup(Player *p, TileMap *map, int row, int col)
 {
     if (row < 0 || row >= MAP_ROWS || col < 0 || col >= MAP_COLS) return false;
@@ -382,33 +408,28 @@ bool player_check_pickup(Player *p, TileMap *map, int row, int col)
     case 'm':
         sfx_play(SFX_PICAXE);
         p->health = p->max_health;
-        map->tiles[row][col] = '0';
-        map->collision[row][col] = 0;
+        pickup_clear_tile(map, row, col);
         return true;
     case 0xB3:
         if (g_num_active_players == 1) {
             p->lives++;
         }
-        map->tiles[row][col] = '0';
-        map->collision[row][col] = 0;
+        pickup_clear_tile(map, row, col);
         return true;
     case 0x8F:
         sfx_play(SFX_PICAXE);
         p->digging_power += 1;
-        map->tiles[row][col] = '0';
-        map->collision[row][col] = 0;
+        pickup_clear_tile(map, row, col);
         return true;
     case 0x90:
         sfx_play(SFX_PICAXE);
         p->digging_power += 3;
-        map->tiles[row][col] = '0';
-        map->collision[row][col] = 0;
+        pickup_clear_tile(map, row, col);
         return true;
     case 0x91:
         sfx_play(SFX_PICAXE);
         p->digging_power += 5;
-        map->tiles[row][col] = '0';
-        map->collision[row][col] = 0;
+        pickup_clear_tile(map, row, col);
         return true;
     case 0x9C: {
         int current_idx = 32000;
@@ -490,8 +511,7 @@ bool player_check_pickup(Player *p, TileMap *map, int row, int col)
             p->weapons[weapon_idx] += qty;
         }
 
-        map->tiles[row][col] = '0';
-        map->collision[row][col] = 0;
+        pickup_clear_tile(map, row, col);
         return true;
     }
     default:
@@ -507,8 +527,7 @@ bool player_check_pickup(Player *p, TileMap *map, int row, int col)
          * seg_1000:3513-3517). */
         p->earned += cash_add;
         p->match_stats[STAT_TREASURES] += 1;
-        map->tiles[row][col] = '0';
-        map->collision[row][col] = 0;
+        pickup_clear_tile(map, row, col);
         return true;
     }
 

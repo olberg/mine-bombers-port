@@ -124,6 +124,14 @@ static int entry_len;                /* name-entry character count */
 static PSelState state;
 static bool f10_abort;
 
+/* What the statistics panel currently shows. The original paints it with
+ * FUN_1000_19e8 at specific events and the pixels stay until the next call:
+ * PANEL_UNTOUCHED = never painted (background art), 0 = boxes and graph
+ * cleared with nothing drawn (PLAY row, empty slot, empty or deleted
+ * record), n >= 1 = record n's statistics. */
+#define PANEL_UNTOUCHED (-1)
+static int panel_rec;
+
 /* A record EXISTS when its first byte is 0 (verified against the shipped
  * PLAYERS.DAT: "Plr 1"/"Plr 2" have byte0=0, the 30 empty slots 0x01;
  * FUN_1000_1892 prints the name when byte0=='\0'). The port previously
@@ -190,6 +198,17 @@ static void copy_slot_name(int slot)
     }
 }
 
+/* Panel contents for a 1-based record index: FUN_1000_19e8 draws nothing
+ * beyond the clears when the index is 0 or the record does not exist. */
+static int panel_for(int rec_index)
+{
+    if (rec_index >= 1 && rec_index <= PLAYER_DB_SLOTS &&
+        record_exists(&player_db.records[rec_index - 1])) {
+        return rec_index;
+    }
+    return 0;
+}
+
 /* First empty record, 1-based (FUN_1000_2710; 0x20 if none). */
 static int first_empty_record(void)
 {
@@ -237,6 +256,7 @@ void player_select_init(void)
     }
 
     cursor = CURSOR_PLAY;  /* original starts on the PLAY row (local_e = 4) */
+    panel_rec = PANEL_UNTOUCHED;
     browse_rec = 1;
     entry_len = 0;
     f10_abort = false;
@@ -273,6 +293,13 @@ static void persist_and_finalize(bool start_match)
     g_num_active_players = g_config.num_players;
 }
 
+/* After a cursor move FUN_1000_295e repaints the panel for the new row:
+ * the slot's selected record, or cleared on the PLAY row. */
+static void panel_follow_cursor(void)
+{
+    panel_rec = (cursor < CURSOR_PLAY) ? panel_for(record_sel[cursor]) : 0;
+}
+
 /* Slot-cursor movement (FUN_1000_295e '2'/'8' handlers): skip inactive
  * player rows, wrap through the PLAY row (position 4). */
 static void cursor_down(void)
@@ -282,6 +309,7 @@ static void cursor_down(void)
     while (cursor > g_config.num_players - 1 && cursor < CURSOR_PLAY) {
         cursor++;
     }
+    panel_follow_cursor();
 }
 
 static void cursor_up(void)
@@ -289,11 +317,13 @@ static void cursor_up(void)
     cursor--;
     if (cursor == -1) {
         cursor = CURSOR_PLAY;
+        panel_follow_cursor();
         return;
     }
     while (cursor > g_config.num_players - 1 && cursor != 0) {
         cursor--;
     }
+    panel_follow_cursor();
 }
 
 static void begin_fade_out(void)
@@ -417,13 +447,16 @@ PlayerSelectResult player_select_update(void)
         if (input_pressed(INPUT_DOWN)) {
             browse_rec++;
             if (browse_rec > PLAYER_DB_SLOTS) browse_rec = 1;
+            panel_rec = panel_for(browse_rec);
         }
         if (input_pressed(INPUT_UP)) {
             browse_rec--;
             if (browse_rec < 1) browse_rec = PLAYER_DB_SLOTS;
+            panel_rec = panel_for(browse_rec);
         }
         if (IsKeyPressed(KEY_DELETE)) {
             browse_delete();
+            panel_rec = panel_for(browse_rec);
             break;
         }
         int ch = GetCharPressed();
@@ -447,9 +480,12 @@ PlayerSelectResult player_select_update(void)
         }
         /* Enter or ESC commits the name; the new record is NOT selected
          * for the slot — the user chooses it with another Enter
-         * (FUN_1000_2350: entry returns to the browse loop). */
+         * (FUN_1000_2350: entry returns to the browse loop). The panel is
+         * repainted only now, for the new record; while typing it keeps
+         * what it showed. */
         if (input_pressed(INPUT_CONFIRM) || input_pressed(INPUT_CANCEL)) {
             state = PSEL_BROWSE;
+            panel_rec = panel_for(browse_rec);
         }
         break;
     }
@@ -556,7 +592,11 @@ static void draw_stats(const PlayerRecord *rec)
         int idx = (k + 36) % 34;   /* 2,3,...,33,0 */
         uint8_t count = rec->weapons[idx];
         int y = GRAPH_Y_BASE - count;
-        DrawLine(x, prev_y, x + GRAPH_X_STEP - 1, y, graph_color(count));
+        Color seg = graph_color(count);
+        DrawLine(x, prev_y, x + GRAPH_X_STEP - 1, y, seg);
+        /* The original's line primitive (FUN_1028_1bfc) includes the end
+         * point; DrawLine leaves it out, which dotted the flat baseline. */
+        DrawPixel(x + GRAPH_X_STEP - 1, y, seg);
         prev_y = y;
         x += GRAPH_X_STEP;
     }
@@ -615,30 +655,23 @@ void player_select_draw(void)
                         WHITE);
         }
         if (state == PSEL_NAME_ENTRY) {
-            /* FUN_1000_200e: 9x2 underline after the typed text. */
+            /* FUN_1000_200e: 9x2 underline after the typed text, filled
+             * with set_draw_page(8, 1): palette index 8 (grey). */
             int row_y = RECLIST_Y + (browse_rec - 1) * RECLIST_ROW_H;
             DrawRectangle(RECLIST_X + 1 + entry_len * 8, row_y + 6, 9, 2,
-                          white);
+                          palette_get_color(8));
         }
     }
 
-    /* Stats panel: browsed record while in the list, otherwise the
-     * record selected for the slot under the cursor. Nothing on PLAY —
-     * the original never calls FUN_1000_19e8 from cursor position 4, so
-     * the boxes keep their background pixels there; on a slot the boxes
-     * are black-filled even when no record is selected (19e8(0)). */
-    bool on_slot = (state == PSEL_BROWSE || state == PSEL_NAME_ENTRY ||
-                    cursor < g_config.num_players);
-    if (on_slot) {
+    /* Stats panel: repainted by FUN_1000_19e8 only when the cursor moves,
+     * the arrow moves, a record is deleted or a name is committed, so it
+     * shows whatever the last such call painted. Before any of those the
+     * boxes keep their background pixels (the screen opens on the PLAY row
+     * without a call); the PLAY row itself clears them (19e8(0)). */
+    if (panel_rec != PANEL_UNTOUCHED) {
         draw_stat_clears();
-        int stats_rec;
-        if (state == PSEL_BROWSE || state == PSEL_NAME_ENTRY) {
-            stats_rec = browse_rec;
-        } else {
-            stats_rec = record_sel[cursor];
-        }
-        if (stats_rec >= 1) {
-            draw_stats(&player_db.records[stats_rec - 1]);
+        if (panel_rec >= 1) {
+            draw_stats(&player_db.records[panel_rec - 1]);
         }
     }
 }

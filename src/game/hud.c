@@ -28,6 +28,16 @@ static Image     hud_bg_img;
 static Texture2D hud_bg_tex;
 static bool      hud_bg_loaded;
 
+void hud_format_name(char *dst, size_t dst_size, const char *name)
+{
+    size_t n = strlen(name);
+    if (n > HUD_NAME_CHARS) n = HUD_NAME_CHARS;
+    if (n >= dst_size) n = dst_size - 1;
+    memcpy(dst, name, n);
+    dst[n] = '\0';
+    if (player_name_has_number_prefix(name)) dst[0] = ' ';
+}
+
 int hud_panel_x(int player_idx)
 {
     if (player_idx < 0 || player_idx >= MAX_PLAYERS) return 0;
@@ -103,6 +113,11 @@ static bool weapon_hud_sprite(uint8_t tile, HudWeaponSprite *out)
 
 #define HUD_WEAPON_SPRITE_SIZE 30
 
+/* The dig-power and money fields are blanked before each print with
+ * fill_rect(Y+8, X+40, Y, X), corners inclusive (seg_1010:3438-3547). */
+#define HUD_VALUE_BOX_W 41
+#define HUD_VALUE_BOX_H  9
+
 /* Health bar: overlay black on the damaged (top) portion.
  *
  * PLAYERS.SPY's per-player "HEALTH" strip is already rendered as a full
@@ -114,6 +129,9 @@ static bool weapon_hud_sprite(uint8_t tile, HudWeaponSprite *out)
  *
  * We mirror that by only drawing the damaged overlay. Geometry is
  * unchanged from the original: X=panel_x+130, Y=2, W=7, max H=25.
+ * fill_rect takes inclusive corners: the erase runs from row 2 through
+ * row 27 - fill_h and from column X through X+7 (seg_1010:3409-3412), one
+ * row and one column more than the 25 - fill_h by 7 box.
  */
 static void draw_health_bar(int px, int py, int health, int max_health)
 {
@@ -129,7 +147,7 @@ static void draw_health_bar(int px, int py, int health, int max_health)
 
     int bar_x = px + HUD_HEALTH_BAR_X;
     int bar_y = py + HUD_HEALTH_BAR_Y;
-    DrawRectangle(bar_x, bar_y, HUD_HEALTH_BAR_W, damaged_h, BLACK);
+    DrawRectangle(bar_x, bar_y, HUD_HEALTH_BAR_W + 1, damaged_h + 1, BLACK);
 }
 
 static void draw_player_panel(const Player *p, int px, int py)
@@ -163,9 +181,12 @@ static void draw_player_panel(const Player *p, int px, int py)
         DrawTextFON(&hud_font, buf, px, py, text_col);
     }
 
-    /* Player name at (panel_x+20, 1). Matches FUN_1010_6030 (seg_1010:3329)
-     * which copies up to 10 chars of name and prints at X=0x20/0xc2/0x165/0x208. */
-    DrawTextFON(&hud_font, p->name, px + 20, py + 1, text_col);
+    /* Player name at (panel_x+20, 1). Matches FUN_1010_6030 (seg_1010:3329):
+     * the name is copied into a space-filled buffer, the first character (the
+     * "N " player-number prefix digit) is forced to a space and the string is
+     * cut to 10 characters; printed at X=0x20/0xc2/0x165/0x208. */
+    hud_format_name(buf, sizeof(buf), p->name);
+    DrawTextFON(&hud_font, buf, px + 20, py + 1, text_col);
 
     /* Health bar: overlay black on damaged portion of the PLAYERS.SPY strip.
      * (PLAYERS.SPY already renders the full colored "HEALTH" strip.) */
@@ -177,13 +198,19 @@ static void draw_player_panel(const Player *p, int px, int py)
      * (The manual: "Digging power and your current cash are displayed
      * under your name".) */
     snprintf(buf, sizeof(buf), "%d", (int)(p->digging_power + p->bonus_stat));
-    DrawTextFON(&hud_font, buf, px + HUD_DIG_X, py + HUD_DIG_Y, text_col);
+    DrawRectangle(px + HUD_DIG_X, py + HUD_DIG_Y, HUD_VALUE_BOX_W,
+                  HUD_VALUE_BOX_H, palette_get_color(0));
+    DrawTextFON(&hud_font, buf, px + HUD_DIG_X, py + HUD_DIG_Y,
+                palette_get_color(HUD_DIG_COLOR));
 
     /* Y=21 line: MONEY = wallet + this round's earnings. The original's
      * "draw_points_displays" (seg_1010:3515) prints DAT_1038_1cd0 + 1cd4
      * (earned + wallet). */
     snprintf(buf, sizeof(buf), "%d", (int)(p->cash + p->earned));
-    DrawTextFON(&hud_font, buf, px + HUD_MONEY_X, py + HUD_MONEY_Y, text_col);
+    DrawRectangle(px + HUD_MONEY_X, py + HUD_MONEY_Y, HUD_VALUE_BOX_W,
+                  HUD_VALUE_BOX_H, palette_get_color(0));
+    DrawTextFON(&hud_font, buf, px + HUD_MONEY_X, py + HUD_MONEY_Y,
+                palette_get_color(HUD_MONEY_COLOR));
 }
 
 void hud_draw(const Player players[], int num_players,
@@ -216,7 +243,9 @@ void hud_draw(const Player players[], int num_players,
         } else {
             /* Dead player: just show name dimmed */
             Color dim = palette_get_color(8);
-            DrawTextFON(&hud_font, players[i].name,
+            char name[32];
+            hud_format_name(name, sizeof(name), players[i].name);
+            DrawTextFON(&hud_font, name,
                         panel_x[i] + 20, HUD_PANEL_Y + 1, dim);
         }
     }
@@ -286,74 +315,6 @@ void hud_draw_timer(int time_remaining, int time_total)
     if (remaining_w > 0) {
         DrawRectangle(HUD_TIMER_X_LEFT, HUD_TIMER_Y_TOP, remaining_w,
                       HUD_TIMER_H, palette_get_color(HUD_TIMER_COLOR));
-    }
-}
-
-/* Map tile type to minimap color index (palette 0-15).
- * Faithfully reproduces FUN_1010_dab7 (seg_1010:8150-8199). */
-static uint8_t tile_to_minimap_color(uint8_t tile)
-{
-    /* Indestructible walls '2'-'4' */
-    if (tile >= 0x32 && tile <= 0x34) return 12;
-
-    /* Destructible walls '7'-'9', 'A'-'F' */
-    if ((tile >= 0x37 && tile <= 0x39) || (tile >= 0x41 && tile <= 0x46)) return 9;
-
-    /* Treasure 's' (0x73) or 0x92-0x9A */
-    if (tile == 0x73 || (tile > 0x91 && tile < 0x9B)) return 5;
-
-    /* Empty floor '0', 'f', 0xAF */
-    if (tile == 0x30 || tile == 0x66 || tile == 0xAF) return 14;
-
-    /* Damaged walls '5'-'6' */
-    if (tile >= 0x35 && tile <= 0x36) return 12;
-
-    /* Indestructible wall '1' */
-    if (tile == 0x31) return 8;
-
-    /* Special tiles: 0xA4, 'p' (0x70), 'q' (0x71) */
-    if (tile == 0xA4 || tile == 0x70 || tile == 0x71) return 9;
-
-    /* Explosive 'e' (0x65) */
-    if (tile == 0x65) return 14;
-
-    /* Mystery box 'y' (0x79) */
-    if (tile == 0x79) return 12;
-
-    /* Teleporter 0x9C */
-    if (tile == 0x9C) return 12;
-
-    /* Proximity mine 'o' (0x6F) */
-    if (tile == 0x6F) return 4;
-
-    /* Default: dark */
-    return 12;
-}
-
-void hud_draw_minimap(const TileMap *map, const Player players[],
-                      int num_players)
-{
-    /* Draw each tile as a 1x1 pixel rectangle at the minimap position.
-     * VGA convention: row (0-63) = screen X, col (0-44) = screen Y.
-     * Minimap: row → horizontal, col → vertical. */
-    for (int row = 0; row < MAP_ROWS; row++) {
-        for (int col = 0; col < MAP_COLS; col++) {
-            uint8_t tile = map->tiles[row][col];
-            uint8_t ci = tile_to_minimap_color(tile);
-            Color c = palette_get_color(ci);
-            DrawRectangle(MINIMAP_X + row, MINIMAP_Y + col, 1, 1, c);
-        }
-    }
-
-    /* Draw player positions as bright dots (palette index 15 = white) */
-    Color player_color = palette_get_color(15);
-    for (int i = 0; i < num_players && i < MAX_PLAYERS; i++) {
-        if (players[i].dead) continue;
-        int row = pixel_to_tile_row(players[i].x_pos);
-        int col = pixel_to_tile_col(players[i].y_pos);
-        if (row >= 0 && row < MAP_ROWS && col >= 0 && col < MAP_COLS) {
-            DrawRectangle(MINIMAP_X + row, MINIMAP_Y + col, 1, 1, player_color);
-        }
     }
 }
 

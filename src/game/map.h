@@ -20,6 +20,7 @@ typedef struct {
     uint16_t overlay[MAP_ROWS][MAP_COLS];
     uint8_t  bomb_owner[MAP_ROWS][MAP_COLS]; /* player index (0-3) who placed bomb; 0xFF = none */
     uint8_t  layer4[MAP_ROWS][MAP_COLS];     /* per-tile flags (g_map_layer4): bit 2 = shop gate marker */
+    uint8_t  seen_tiles[MAP_ROWS][MAP_COLS]; /* tiles as of the last visibility_reveal_changed (darkness only) */
     int      screen_shake;  /* shake counter (seg_1010:7705-7725): decrements each frame,
                              * odd values offset render by shake_value pixels vertically */
     int      palette_flash; /* palette flash counter: >0 means render white overlay.

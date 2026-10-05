@@ -16,7 +16,9 @@ version of Mine Bombers was released as **freeware** by Skitso Productions on
 
 ## Requirements
 
-- Windows (primary target). Built with MinGW-w64 GCC.
+- Windows (primary target). Built with MinGW-w64 GCC. Linux is supported on
+  a best-effort basis: omit the `-G "MinGW Makefiles"` option below and
+  install the system packages raylib needs to build.
 - CMake 3.20+ and git — dependencies (raylib, libxmp, Unity) are fetched
   automatically at configure time.
 - The original Mine Bombers 3.11 game data (see next section).
@@ -59,6 +61,8 @@ Expand-Archive mnb311fw.zip -DestinationPath build\assets
 
 Notes:
 
+- If the game closes at once without opening its window, the game data is
+  missing or incomplete: `minebombers.log` lists every missing file.
 - On the first run the log shows `FILEIO: [assets/keybinds.dat] Failed to
   open file` — harmless. The file is created when you save key bindings in
   the options menu.
@@ -97,6 +101,16 @@ Many tests load original game files and expect an `assets/` folder inside
 
 ```powershell
 Expand-Archive mnb311fw.zip -DestinationPath build\tests\assets
+```
+
+A few tests open a window, and the soak test (`test_mp_soak`) plays full bot
+matches in the game itself, using `build/assets/`. Set `MB_VOLUME=0` to
+silence the game and `MB_MONITOR=<n>` to move the windows to another display
+(0 = primary):
+
+```powershell
+$env:MB_VOLUME = 0; $env:MB_MONITOR = 1
+ctest --test-dir build --output-on-failure
 ```
 
 ## About the original game

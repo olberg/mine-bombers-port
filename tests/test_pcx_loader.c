@@ -73,6 +73,49 @@ void test_palette_present(void)
     UnloadImage(img);
 }
 
+/* The portraits hold a few pixels with index 255 (near-white in the file
+ * palette). The original draws in a 16-colour planar mode, where they show as
+ * colour 15 (skin). */
+void test_index_255_shows_as_color_15(void)
+{
+    Image img = LoadPCX("assets/KELVOIT.PPM");
+    TEST_ASSERT_NOT_NULL(img.data);
+    const uint8_t *px = (const uint8_t *)img.data;
+    int near_white = 0;
+    for (int i = 0; i < img.width * img.height; i++) {
+        if (px[i*4] == 252 && px[i*4+1] == 248 && px[i*4+2] == 252) near_white++;
+    }
+    TEST_ASSERT_EQUAL_INT(0, near_white);
+    UnloadImage(img);
+}
+
+/* The original draws each run one pixel longer than it is; the last run of
+ * a row leaves that pixel just right of the image. KELVOIT.PPM is 132 wide
+ * and 217 of its 219 rows end in a run. */
+void test_run_overshoot_column(void)
+{
+    Image img = LoadPCX("assets/KELVOIT.PPM");
+    TEST_ASSERT_NOT_NULL(img.data);
+    TEST_ASSERT_EQUAL_INT(133, img.width);
+    TEST_ASSERT_EQUAL_INT(219, img.height);
+
+    const uint8_t *px = (const uint8_t *)img.data;
+    int spilled = 0;
+    for (int y = 0; y < img.height; y++) {
+        const uint8_t *last = px + (y * img.width + 132) * 4;
+        const uint8_t *prev = last - 4;
+        if (last[3] == 255) {
+            spilled++;
+            TEST_ASSERT_EQUAL_UINT8_ARRAY(prev, last, 3);
+        } else {
+            TEST_ASSERT_EQUAL_UINT8(0, last[3]);
+        }
+        TEST_ASSERT_EQUAL_UINT8(255, prev[3]);
+    }
+    TEST_ASSERT_EQUAL_INT(217, spilled);
+    UnloadImage(img);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -81,5 +124,7 @@ int main(void)
     RUN_TEST(test_load_all_portraits);
     RUN_TEST(test_load_nonexistent);
     RUN_TEST(test_palette_present);
+    RUN_TEST(test_index_255_shows_as_color_15);
+    RUN_TEST(test_run_overshoot_column);
     return UNITY_END();
 }

@@ -170,6 +170,12 @@ typedef struct {
 extern Player g_players[MAX_PLAYERS];
 extern int    g_num_active_players;
 
+/* Player select leaves the runtime name as "N " + the record name, N being
+ * the player number 1-4 (FUN_1000_3276 tail). The shop, HUD and Hall of Fame
+ * hide that digit. The autoplay harness names its bots the same way; the
+ * slot defaults ("Player N") do not have the prefix. */
+bool player_name_has_number_prefix(const char *name);
+
 /* Initialize player to starting defaults for the given slot index (0-3). */
 void player_init_defaults(Player *p, int player_num);
 

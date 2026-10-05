@@ -35,6 +35,9 @@
  *                          screenshot its render
  *   MB_AUTOPLAY_RESDWELL=N keep the match-results screen open N drawn
  *                          frames before returning to the menu
+ *   MB_MONITOR=<n>         window on raylib monitor n, 0 = primary (read by
+ *                          util/harness_env.h; works without MB_AUTOPLAY)
+ *   MB_VOLUME=<n>          master volume percent, 0 = silent (same)
  */
 
 /* Read env config. Call once at startup before the window opens. */

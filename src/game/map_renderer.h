@@ -10,16 +10,15 @@ void map_renderer_init(void);
 /* Set the current map to render. */
 void map_renderer_set_map(const TileMap *map);
 
-/* Enable/disable fog-of-war darkness rendering.
- * When enabled, only tiles with layer4 bit 0 == 0 (revealed) are drawn;
- * hidden tiles render as black. Decompiled ref: seg_1010:670-672. */
-void map_renderer_set_darkness(bool enabled);
-
 /* Draw entire map with optional vertical pixel offset (for screen shake).
  * Original uses a fixed viewport — no scrolling camera.  The entire map
  * fits on screen (45 cols × 10px + 30px HUD = 480px).
  * y_offset is only non-zero during screen shake. */
 void map_renderer_draw(int y_offset);
+
+/* True when the tile is drawn black: darkness is on, the tile is still hidden
+ * (layer4 bit 0) and it is not part of the outer ring, which is always shown. */
+bool map_renderer_tile_hidden(const TileMap *map, int row, int col);
 
 /* Convert pixel position to tile array indices.
  * Original VGA: row (first index) = screen X, col (second index) = screen Y.

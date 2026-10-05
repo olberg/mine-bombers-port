@@ -168,8 +168,10 @@ void autoplay_setup_players(void)
             snprintf(g_players[i].name, sizeof(g_players[i].name), "%d %s",
                      i + 1, base);
         } else {
+            /* Same "N " prefix as a name from player select, so the shop
+             * and HUD put the bot names where real ones go. */
             snprintf(g_players[i].name, sizeof(g_players[i].name),
-                     "BOT%d", i + 1);
+                     "%d BOT%d", i + 1, i + 1);
             /* Harness-only loadout: bots skip the shop, so give them bombs
              * up front or the kill/scoring paths never execute. */
             g_players[i].weapons[player_weapon_index(WEAPON_SMALL_BOMB)] = 50;

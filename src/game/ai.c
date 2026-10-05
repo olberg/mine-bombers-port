@@ -50,7 +50,7 @@ static AiSearchResult spiral_search(const TileMap *map,
                                      int radius,
                                      bool (*match_fn)(uint8_t))
 {
-    AiSearchResult result = { false, 0, 0 };
+    AiSearchResult result = { false, 0, 0, 0 };
 
     for (int r = 1; r <= radius; r++) {
         /* Search the perimeter of the square at distance r */

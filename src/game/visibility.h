@@ -34,6 +34,21 @@ void visibility_init(TileMap *map);
  * Decompiled ref: FUN_1000_4d25 (seg_1000:3156-3306). */
 void visibility_reveal_player(TileMap *map, const Player *p);
 
+/* Start tracking tile changes from the map as it is now: changes made before
+ * this (monsters taken off the map, start areas cleared) are not revealed.
+ * visibility_init does this too; call it again when play begins. */
+void visibility_snapshot(TileMap *map);
+
+/* Reveal every tile whose contents changed since the last call (or since
+ * visibility_snapshot). The original redraws a tile through mark_tile_for_redraw
+ * whenever it changes — bomb placed, fuse stage, explosion, wall damage
+ * stage, pickup, corpse — and that routine clears the hidden bit while
+ * darkness is active (seg_1010:5258-5275), so changes show even in the dark.
+ * Call once per simulated frame when darkness is on. This compares tile
+ * contents, so a tile the original redraws without changing it is not
+ * revealed here. */
+void visibility_reveal_changed(TileMap *map);
+
 /* Check if a tile has been revealed (layer4 bit 0 == 0). */
 bool visibility_is_revealed(const TileMap *map, int row, int col);
 

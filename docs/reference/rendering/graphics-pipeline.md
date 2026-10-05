@@ -78,8 +78,28 @@ Per frame:
 2. **Player/entity sprites** — blitted on top of tiles
 3. **HUD panels** — `draw_player_status_panels()` draws weapon/stat panels
 4. **HUD text** — `draw_game_hud()` draws text overlays (weapon names, cash, etc.)
-5. **Minimap** (if enabled) — `g_minimap_enabled` controls visibility
-6. **Screen shake** — CRTC start address offset (the only CRTC write during gameplay; there is no per-frame page flip)
+5. **Screen shake** — CRTC start address offset (the only CRTC write during gameplay; there is no per-frame page flip)
+
+There is no minimap during a round. The decompiled name `g_minimap_enabled` is
+a mislabel: it is the darkness flag, set by `process_menu_selection` when the
+DARKNESS option is on or there is only one player (seg_1010:7197-7201). With
+darkness on:
+
+- `redraw_game_screen` draws only the outer ring of tiles (`FUN_1010_97b5`,
+  seg_1010:5279-5340) and fills the rest of the map area black
+  (seg_1000:2918-2922), instead of drawing every tile.
+- A hidden tile has layer 4 bit 0 set. `mark_tile_for_redraw` clears that bit
+  for the tile it draws (seg_1010:5269-5272), so a tile that changes shows
+  even in the dark. The switch and gate routines (`FUN_1010_1019`,
+  `FUN_1010_1156`) are the exception: they redraw a gate tile only if it is
+  already revealed (seg_1010:670-672, 717-719).
+- Monsters do not get their `move_player` pass before the round's fade-in
+  (seg_1000:7132-7134).
+
+The one-pixel-per-tile picture of the map is drawn in two places only: the
+shop's NEXT LEVEL panel (`FUN_1010_b227` at (0x120, 0x33), and only when
+darkness is off, seg_1010:6540) and the map picker's preview box
+(`FUN_1010_db96` at (0x14a, 7)).
 
 ## Palette System
 

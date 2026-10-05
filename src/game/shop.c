@@ -4,6 +4,7 @@
 #include "game/sprites.h"
 #include "game/config.h"
 #include "game/hud.h"
+#include "game/map_thumbnail.h"
 #include "loaders/spy_loader.h"
 #include "loaders/font_loader.h"
 #include "gfx/palette.h"
@@ -245,7 +246,7 @@ static bool shop_aborted;
 
 /* NEXT LEVEL panel data: the upcoming round's already-loaded map
  * and the rounds-left count, set by main.c before shop_init. The number
- * prints at (306, 120); the thumbnail draws at the minimap position. */
+ * prints at (306, 120); the thumbnail draws at (288, 51). */
 static const TileMap *next_map;
 static int next_rounds_left;
 #define NEXT_ROUNDS_X 306   /* 0x132 (FUN_1010_b293, print_string_at Y,X) */
@@ -560,14 +561,133 @@ void shop_init(void)
                                                g_config.option_toggle[2]);
 }
 
+/* One buy-or-sell auto-repeat tick. `held` is the (already gated) key state;
+ * `act` is shop_buy_item or shop_sell_item. Ramps the shared speed counter,
+ * ticks the shared delay counter and fires `act` on the cell (or marks the
+ * player done on LEAVE) when the delay reaches zero. */
+static void shop_repeat_step(int i, int cur, bool held,
+                             bool (*act)(Player *, int))
+{
+    if (!held) return;
+
+    repeat_speed[i]++;
+    if (repeat_speed[i] > REPEAT_SPEED_MAX)
+        repeat_speed[i] = REPEAT_SPEED_MAX;
+    repeat_delay[i]--;
+    if (repeat_delay[i] <= 0) {
+        if (cur == SHOP_LEAVE_INDEX) {
+            player_done[i] = true;
+        } else {
+            act(&g_players[i], cur - 1);
+        }
+        int interval = REPEAT_DELAY_MAX - repeat_speed[i] / 3;
+        repeat_delay[i] = interval > 1 ? interval : 1;
+    }
+}
+
+/* One frame of shop input for a single player. */
+static void shop_player_input(int i)
+{
+    int cur = cursor_pos[i];
+    bool moved = false;
+
+    /*
+     * Cursor movement matching decompiled FUN_1010_b316:
+     *   LEFT  (0xF3): cur -= 1, min 1
+     *   RIGHT (0xF4): cur += 1, max 0x1C (28)
+     *   UP    (0xF5): cur -= 4, if < 5 clamp to 1
+     *   DOWN  (0xF6): cur += 4, if >= 0x18 (24) clamp to 0x1C (28)
+     */
+    if (player_input_pressed(i, PLAYER_INPUT_LEFT)) {
+        if (cur > 1) cur--;
+        moved = true;
+    }
+    if (player_input_pressed(i, PLAYER_INPUT_RIGHT)) {
+        if (cur < SHOP_CURSOR_MAX) cur++;
+        moved = true;
+    }
+    if (player_input_pressed(i, PLAYER_INPUT_UP)) {
+        if (cur < 5) {
+            cur = 1;
+        } else {
+            cur -= 4;
+        }
+        moved = true;
+    }
+    if (player_input_pressed(i, PLAYER_INPUT_DOWN)) {
+        if (cur < 0x18) {
+            cur += 4;
+        } else {
+            cur = SHOP_CURSOR_MAX;
+        }
+        moved = true;
+    }
+
+    cursor_pos[i] = cur;
+
+    /* Cursor move resets auto-repeat state (matches decompiled
+     * 6586-6589: speed=0, delay=1 after any nav key). With delay=1,
+     * the first BUY/SELL press on the new cell fires next frame. */
+    if (moved) {
+        repeat_speed[i] = 0;
+        repeat_delay[i] = REPEAT_DELAY_AFTER_MOVE;
+    }
+
+    /* A fresh press edge fires immediately. The original's delay
+     * counter persists after each fire (up to 0x14 iterations) and
+     * only decrements while the key is held — but its DOS shop loop
+     * ran unthrottled, so even a brief tap spanned enough iterations
+     * to drain it and the next buy registered. At the port's fixed
+     * 60 fps a tap drains only 1-2 frames' worth, so repeat taps on
+     * the same cell were swallowed. Collapsing the delay on the
+     * press edge (player_input_edge, no typematic) makes every
+     * discrete press register while leaving the held-key ramp
+     * (interval 0x14 - speed/3) untouched. */
+    if (player_input_edge(i, PLAYER_INPUT_BOMB) ||
+        (selling_enabled && player_input_edge(i, PLAYER_INPUT_CYCLE))) {
+        repeat_delay[i] = 1;
+    }
+
+    /*
+     * Buy and sell both use the SAME speed/delay counters in the
+     * original (decompiled 6651-6774). Each block independently
+     * ramps `repeat_speed` and ticks `repeat_delay` while its key
+     * is held, firing when delay reaches zero.
+     *
+     * On fire, the new interval is `0x14 - speed/3` (capped ≥1),
+     * so holding the key produces an accelerating auto-repeat.
+     * No state reset on key release — state persists until cursor
+     * moves.
+     */
+
+    /* Buy auto-repeat (BOMB key, original +0xF8, decompiled 6651-6717).
+     * LEAVE: mark player done, no purchase. */
+    shop_repeat_step(i, cur, player_input_down(i, PLAYER_INPUT_BOMB),
+                     shop_buy_item);
+
+    /* Sell auto-repeat (CYCLE key held, original +0xFA, decompiled
+     * 6718-6774). Gated by `selling_enabled` (option_toggle[2] or SP).
+     * Holding CYCLE on the LEAVE cell also marks the player done
+     * (matches decompiled 6742-6744). */
+    shop_repeat_step(i, cur,
+                     player_input_down(i, PLAYER_INPUT_CYCLE) && selling_enabled,
+                     shop_sell_item);
+}
+
+/* Advance the palette fade one step and push it to the background texture. */
+static void shop_fade_frame(void)
+{
+    palette_update();
+    palette_apply_to_pixels(bg_indexed, (uint8_t *)bg_img.data,
+                            SPY_WIDTH * SPY_HEIGHT);
+    UpdateTexture(bg_tex, bg_img.data);
+}
+
 ShopResult shop_update(void)
 {
     switch (state) {
     case SHOP_FADE_IN:
-        palette_update();
-        palette_apply_to_pixels(bg_indexed, (uint8_t *)bg_img.data,
-                                SPY_WIDTH * SPY_HEIGHT);
-        UpdateTexture(bg_tex, bg_img.data);
+        shop_fade_frame();
         if (!palette_is_fading()) {
             state = SHOP_SHOPPING;
         }
@@ -614,116 +734,7 @@ ShopResult shop_update(void)
          * page could shop while their panel isn't drawn. */
         for (int i = input_first; i < input_last && i < MAX_PLAYERS; i++) {
             if (player_done[i]) continue;
-
-            int cur = cursor_pos[i];
-            bool moved = false;
-
-            /*
-             * Cursor movement matching decompiled FUN_1010_b316:
-             *   LEFT  (0xF3): cur -= 1, min 1
-             *   RIGHT (0xF4): cur += 1, max 0x1C (28)
-             *   UP    (0xF5): cur -= 4, if < 5 clamp to 1
-             *   DOWN  (0xF6): cur += 4, if >= 0x18 (24) clamp to 0x1C (28)
-             */
-            if (player_input_pressed(i, PLAYER_INPUT_LEFT)) {
-                if (cur > 1) cur--;
-                moved = true;
-            }
-            if (player_input_pressed(i, PLAYER_INPUT_RIGHT)) {
-                if (cur < SHOP_CURSOR_MAX) cur++;
-                moved = true;
-            }
-            if (player_input_pressed(i, PLAYER_INPUT_UP)) {
-                if (cur < 5) {
-                    cur = 1;
-                } else {
-                    cur -= 4;
-                }
-                moved = true;
-            }
-            if (player_input_pressed(i, PLAYER_INPUT_DOWN)) {
-                if (cur < 0x18) {
-                    cur += 4;
-                } else {
-                    cur = SHOP_CURSOR_MAX;
-                }
-                moved = true;
-            }
-
-            cursor_pos[i] = cur;
-
-            /* Cursor move resets auto-repeat state (matches decompiled
-             * 6586-6589: speed=0, delay=1 after any nav key). With delay=1,
-             * the first BUY/SELL press on the new cell fires next frame. */
-            if (moved) {
-                repeat_speed[i] = 0;
-                repeat_delay[i] = REPEAT_DELAY_AFTER_MOVE;
-            }
-
-            /* A fresh press edge fires immediately. The original's delay
-             * counter persists after each fire (up to 0x14 iterations) and
-             * only decrements while the key is held — but its DOS shop loop
-             * ran unthrottled, so even a brief tap spanned enough iterations
-             * to drain it and the next buy registered. At the port's fixed
-             * 60 fps a tap drains only 1-2 frames' worth, so repeat taps on
-             * the same cell were swallowed. Collapsing the delay on the
-             * press edge (player_input_edge, no typematic) makes every
-             * discrete press register while leaving the held-key ramp
-             * (interval 0x14 - speed/3) untouched. */
-            if (player_input_edge(i, PLAYER_INPUT_BOMB) ||
-                (selling_enabled && player_input_edge(i, PLAYER_INPUT_CYCLE))) {
-                repeat_delay[i] = 1;
-            }
-
-            /*
-             * Buy and sell both use the SAME speed/delay counters in the
-             * original (decompiled 6651-6774). Each block independently
-             * ramps `repeat_speed` and ticks `repeat_delay` while its key
-             * is held, firing when delay reaches zero.
-             *
-             * On fire, the new interval is `0x14 - speed/3` (capped ≥1),
-             * so holding the key produces an accelerating auto-repeat.
-             * No state reset on key release — state persists until cursor
-             * moves.
-             */
-
-            /* Buy auto-repeat (BOMB key, original +0xF8, decompiled 6651-6717) */
-            if (player_input_down(i, PLAYER_INPUT_BOMB)) {
-                repeat_speed[i]++;
-                if (repeat_speed[i] > REPEAT_SPEED_MAX)
-                    repeat_speed[i] = REPEAT_SPEED_MAX;
-                repeat_delay[i]--;
-                if (repeat_delay[i] <= 0) {
-                    if (cur == SHOP_LEAVE_INDEX) {
-                        /* LEAVE: mark player done, no purchase */
-                        player_done[i] = true;
-                    } else {
-                        shop_buy_item(&g_players[i], cur - 1);
-                    }
-                    int interval = REPEAT_DELAY_MAX - repeat_speed[i] / 3;
-                    repeat_delay[i] = interval > 1 ? interval : 1;
-                }
-            }
-
-            /* Sell auto-repeat (CYCLE key held, original +0xFA, decompiled
-             * 6718-6774). Gated by `selling_enabled` (option_toggle[2] or SP).
-             * Holding CYCLE on the LEAVE cell also marks the player done
-             * (matches decompiled 6742-6744). */
-            if (player_input_down(i, PLAYER_INPUT_CYCLE) && selling_enabled) {
-                repeat_speed[i]++;
-                if (repeat_speed[i] > REPEAT_SPEED_MAX)
-                    repeat_speed[i] = REPEAT_SPEED_MAX;
-                repeat_delay[i]--;
-                if (repeat_delay[i] <= 0) {
-                    if (cur == SHOP_LEAVE_INDEX) {
-                        player_done[i] = true;
-                    } else {
-                        shop_sell_item(&g_players[i], cur - 1);
-                    }
-                    int interval = REPEAT_DELAY_MAX - repeat_speed[i] / 3;
-                    repeat_delay[i] = interval > 1 ? interval : 1;
-                }
-            }
+            shop_player_input(i);
         }
 
         /* Exit / page transition.
@@ -761,10 +772,7 @@ ShopResult shop_update(void)
     }
 
     case SHOP_FADE_OUT:
-        palette_update();
-        palette_apply_to_pixels(bg_indexed, (uint8_t *)bg_img.data,
-                                SPY_WIDTH * SPY_HEIGHT);
-        UpdateTexture(bg_tex, bg_img.data);
+        shop_fade_frame();
         if (!palette_is_fading()) {
             if (shop_aborted) {
                 return SHOP_ABORTED;
@@ -829,9 +837,10 @@ static int shop_get_qty(const Player *p, int shop_idx)
  * 5 gradient columns: 0xe, 0xd, 0xc, 0xb, 7 (left to right).
  *
  * Decompiled: iVar2 = panel_base + 0x38 + col*64 (bar X = cell_x + 56)
- *   Bar Y area: row*48+99 to row*48+139 (40px, = cell_y+3 to cell_y+43)
- *   fill_height = qty * 2, capped at 40 (0x28)
- *   Bar fills from bottom (cell_y+43) upward by fill_height pixels.
+ *   Bar Y area: row*48+99 to row*48+139 (= cell_y+3 to cell_y+43)
+ *   empty = 40 - qty*2, floored at 0
+ *   Each column is a line from row*48+99+empty down to row*48+139, both
+ *   ends included (FUN_1028_1bfc), so qty items fill qty*2 + 1 rows.
  */
 static void draw_qty_bar(int cell_x, int cell_y, int qty)
 {
@@ -844,7 +853,7 @@ static void draw_qty_bar(int cell_x, int cell_y, int qty)
     static const uint8_t bar_colors[5] = { 0x0e, 0x0d, 0x0c, 0x0b, 0x07 };
     for (int col = 0; col < 5; col++) {
         Color c = palette_get_color(bar_colors[col]);
-        DrawRectangle(bar_x + col, bar_bottom - fill_h, 1, fill_h, c);
+        DrawRectangle(bar_x + col, bar_bottom - fill_h, 1, fill_h + 1, c);
     }
 }
 
@@ -870,7 +879,7 @@ static void draw_player_shop(const Player *p, int px_base, int cursor,
     {
         char masked[26];
         snprintf(masked, sizeof(masked), "%s", p->name);
-        if (masked[0] != '\0') masked[0] = ' ';
+        if (player_name_has_number_prefix(masked)) masked[0] = ' ';
         DrawTextFON(&shop_font, masked, name_x, INFO_NAME_X_OFF, col_white);
     }
 
@@ -882,9 +891,10 @@ static void draw_player_shop(const Player *p, int px_base, int cursor,
     snprintf(buf, sizeof(buf), "%d", (int)p->cash);
     DrawTextFON(&shop_font, buf, info_x, INFO_CASH_Y, col_yellow);
 
-    /* Selected item count (color 1, at Y=58) */
-    if (cursor >= 1 && cursor <= SHOP_ITEM_COUNT) {
-        int qty = shop_get_qty(p, cursor - 1);
+    /* Selected item count (color 1, at Y=58). On LEAVE the original shows 0
+     * (DOSBox capture, cursor on LEAVE). */
+    if (cursor >= 1 && cursor <= SHOP_LEAVE_INDEX) {
+        int qty = (cursor <= SHOP_ITEM_COUNT) ? shop_get_qty(p, cursor - 1) : 0;
         snprintf(buf, sizeof(buf), "%d", qty);
         DrawTextFON(&shop_font, buf, info_x, INFO_COUNT_Y, col_white);
     }
@@ -948,9 +958,10 @@ void shop_draw(void)
     /* NEXT LEVEL panel (FUN_1010_b293, seg_1010:6526-6542): the
      * rounds-remaining number prints at (X=306, Y=120) under the caption
      * baked into SHOPPIC.SPY, and the upcoming map draws as a 64x45
-     * one-pixel-per-tile thumbnail at (288, 51) — the same renderer as
-     * the darkness minimap — ONLY when darkness is off (the original
-     * gates on g_minimap_enabled == 0: no peeking at a hidden map). */
+     * one-pixel-per-tile thumbnail at (288, 51) — the picture the map
+     * picker also shows as its preview — ONLY when darkness is off (the
+     * original gates on g_minimap_enabled == 0: no peeking at a hidden
+     * map). */
     {
         char buf[16];
         snprintf(buf, sizeof(buf), "%d", next_rounds_left);
@@ -959,7 +970,8 @@ void shop_draw(void)
         bool darkness = (g_config.num_players == 1) ||
                         (g_config.option_toggle[0] != 0);
         if (next_map && !darkness) {
-            hud_draw_minimap(next_map, NULL, 0);
+            map_thumbnail_draw(next_map, MAP_THUMBNAIL_SHOP_X,
+                               MAP_THUMBNAIL_SHOP_Y);
         }
     }
 

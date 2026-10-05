@@ -63,6 +63,7 @@ add_executable(minebombers
     src/game/entity.c
     src/game/ai.c
     src/game/hud.c
+    src/game/map_thumbnail.c
     src/game/shop.c
     src/game/player_select.c
     src/game/round.c

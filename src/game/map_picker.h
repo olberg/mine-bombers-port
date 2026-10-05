@@ -28,6 +28,10 @@ void map_picker_draw(void);
 /* Cleanup map picker resources. */
 void map_picker_cleanup(void);
 
+/* Top-left of the minimap in the preview box (0x14a, 7 in the original). */
+#define MAP_PICKER_PREVIEW_X 330
+#define MAP_PICKER_PREVIEW_Y 7
+
 /* Get the per-round map selection array (internal representation).
  * Each entry is a 1-BASED grid index (1..N = map_list index + 1), 0
  * (in-session: unassigned or the explicit "Random" cell), or
